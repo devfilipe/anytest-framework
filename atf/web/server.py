@@ -1096,6 +1096,41 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         except Exception as e:  # noqa: BLE001 — surface any probe failure as unreachable
             return {"ok": False, "target": target, "ms": None, "detail": str(e)[:200]}
 
+    @app.post("/api/inventory/run-signal")              # dry-run one node-action signal command on its agent
+    def inv_run_signal(body: dict = Body(...), _=Depends(require_login)):
+        agent_name = (body.get("agent") or "").strip()
+        command = (body.get("command") or "").strip()
+        if not agent_name or not command:
+            raise HTTPException(400, "need agent and command")
+        node = next((a for a in repo.list_inv_agents() if a["name"] == agent_name), None)
+        if node is None:
+            raise HTTPException(404, "unknown agent")
+        # resolve the node's SSH password from the vault (inventory scope + the bench being edited)
+        secrets = dict(repo.secrets("__inventory__", reveal=True))
+        bench = (body.get("bench") or "").strip()
+        if bench:
+            try:
+                secrets.update(repo.secrets(bench, reveal=True))
+            except Exception:  # noqa: BLE001 — unsaved/new bench has no secrets yet; inventory scope still applies
+                pass
+        ref = node.get("ssh_secret_ref") or ""
+        pw = secrets.get(ref, "") if ref else ""
+        from atf.access.agent import AgentConn
+        from atf.core.inventory import Agent
+        ag = Agent(name=node["name"], platform=node.get("platform", "linux"), host=node.get("host", ""),
+                   ssh_user=node.get("ssh_user", ""), ssh_password=pw)
+        conn = AgentConn(ag)
+        try:
+            r = conn.run(command, timeout=20)
+            return {"ok": r.rc == 0, "rc": r.rc, "out": (r.out or "")[:4000], "err": (r.err or "")[:2000]}
+        except Exception as e:  # noqa: BLE001 — surface any exec/SSH failure to the UI
+            return {"ok": False, "rc": None, "out": "", "err": str(e)[:400]}
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     @app.get("/api/benches")
     def benches():
         return repo.list_benches()

@@ -1188,8 +1188,11 @@ function actionBlock(i){ const as=CFG.boards[i].actions||[];
       +`<div class="field" style="margin:0;width:150px"><label>Action</label><div class="pill" style="display:inline-block" title="${esc(ent&&ent.description||'')}">${esc(ac.name)}</div></div>`
       +`<div class="field" style="margin:0;width:150px"><label>Agent</label><select class="f" onchange="CFG.boards[${i}].actions[${ai}].agent=this.value"><option value="">agent…</option>${agentOpts(ac.agent)}</select></div>`
       +`<div style="flex:1"></div><button class="btn-ghost" onclick="rmActionBlock(${i},${ai})" title="remove action">✕</button></div>`;
-    (ac.signals||[]).forEach((s,si)=>{ const dsc=sdesc(s.k); h+=`<div class="row" style="margin:6px 0 0;gap:8px;align-items:center"><span class="pill" style="min-width:56px;text-align:center" title="${esc(dsc)}">${esc(s.k)}</span>`
-      +`<input class="f" style="flex:1;min-width:220px" title="${esc(dsc)}" value="${esc(s.v)}" oninput="CFG.boards[${i}].actions[${ai}].signals[${si}].v=this.value" placeholder="${dsc?esc(dsc):`command for the '${esc(s.k)}' signal`} (runs on the agent)"></div>`; });
+    (ac.signals||[]).forEach((s,si)=>{ const dsc=sdesc(s.k); const oid=`sig-out-${i}-${ai}-${si}`;
+      h+=`<div class="row" style="margin:6px 0 0;gap:8px;align-items:center"><span class="pill" style="min-width:56px;text-align:center" title="${esc(dsc)}">${esc(s.k)}</span>`
+      +`<input class="f" style="flex:1;min-width:220px" title="${esc(dsc)}" value="${esc(s.v)}" oninput="CFG.boards[${i}].actions[${ai}].signals[${si}].v=this.value" placeholder="${dsc?esc(dsc):`command for the '${esc(s.k)}' signal`} (runs on the agent)">`
+      +`<button class="btn-ghost" title="Run this command on the wired agent (dry-run)" onclick="runSignal(${i},${ai},${si},this,'${oid}')">▶ Run</button></div>`
+      +`<div id="${oid}" class="muted" style="margin:2px 0 0 64px;white-space:pre-wrap;font-family:monospace;font-size:12px"></div>`; });
     h+=`</div>`;
   });
   if(avail.length) h+=`<select class="f" style="max-width:230px;margin-top:8px" onchange="addActionBlock(${i},this.value);this.value=''"><option value="">+ wire node action…</option>${avail.map(a=>`<option>${esc(a.name)}</option>`).join("")}</select>`;
@@ -1198,6 +1201,24 @@ function actionBlock(i){ const as=CFG.boards[i].actions||[];
 function addActionBlock(i,name){ if(!name)return; const cat=(ACTION_CAT||[]).find(a=>a.name===name); if(!cat)return;
   CFG.boards[i].actions.push({name,action_name:name,agent:"",signals:(cat.signals||[]).map(s=>({k:s.name,v:""}))}); reRenderBench(); }
 function rmActionBlock(i,ai){ CFG.boards[i].actions.splice(ai,1); reRenderBench(); }
+async function runSignal(i,ai,si,btn,oid){
+  const ac=CFG.boards[i].actions[ai], sig=ac.signals[si], out=document.getElementById(oid);
+  const agent=ac.agent||"", command=(sig.v||"").trim();
+  if(!agent){ if(out){out.className="muted";out.textContent="⚠ wire an agent first";} return; }
+  if(!command){ if(out){out.className="muted";out.textContent="⚠ empty command";} return; }
+  const old=btn.textContent; btn.disabled=true; btn.textContent="…";
+  if(out){ out.className="muted"; out.textContent="running…"; }
+  try{
+    const r=await adminFetch("/api/inventory/run-signal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent,command,bench:CFG._name||""})});
+    const d=await r.json().catch(()=>({ok:false,err:"bad response"}));
+    if(out){
+      const tag=d.ok?'<span class="dot ok"></span> rc=0':`<span class="dot danger"></span> rc=${d.rc==null?"—":d.rc}`;
+      const bodytxt=[d.out,d.err].filter(x=>x&&x.trim()).join("\n").trim();
+      out.className=""; out.innerHTML=tag+(bodytxt?"\n"+esc(bodytxt):"");
+    }
+  }catch(e){ if(out){ out.className="muted"; out.textContent="error"; } }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
 function modelOpts(sel){ const opts=(CFG._models||[]).map(x=>`<option ${x.name===sel?'selected':''}>${esc(x.name)}</option>`).join("");
   return (sel && !(CFG._models||[]).some(x=>x.name===sel))?`<option selected>${esc(sel)}</option>`+opts:opts; }
 function boardCard(i){ const b=CFG.boards[i];
