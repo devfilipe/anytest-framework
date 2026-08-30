@@ -1,0 +1,22 @@
+[Unit]
+Description=Anytest Framework (atf) web dashboard + API
+Documentation=https://github.com/devfilipe/anytest-framework
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atf
+Group=atf
+WorkingDirectory=/opt/anytest-framework
+EnvironmentFile=/etc/atf/atf.env
+ExecStart=/opt/anytest-framework/.venv/bin/atf web --host 0.0.0.0 --port 8899 --out /var/lib/atf/reports
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/atf
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
