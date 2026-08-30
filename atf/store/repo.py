@@ -608,7 +608,7 @@ class Repo:
     def list_inv_agents(self) -> list[dict]:
         with self._lock:
             rows = [dict(r) for r in self._all(
-                "SELECT name,platform,host,ssh_user,ssh_secret_ref,last_editor,updated_at "
+                "SELECT name,platform,host,ssh_user,ssh_secret_ref,comments,last_editor,updated_at "
                 "FROM inv_agent ORDER BY name")]
             for a in rows:
                 a["benches"] = [x["name"] for x in self._all(
@@ -617,18 +617,22 @@ class Repo:
             return rows
 
     @staticmethod
-    def _inv_agent_cur(cur, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", editor=""):
+    def _inv_agent_cur(cur, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", comments="", editor=""):
+        # comments/last_editor/updated_at are human metadata: only a real editor (non-empty, from the
+        # inventory editor) touches them. Bench-sync passes editor='' and must NOT wipe them.
         cur.execute(
-            "INSERT INTO inv_agent(name,platform,host,ssh_user,ssh_secret_ref,last_editor,updated_at) "
-            "VALUES(?,?,?,?,?,?,datetime('now')) "
+            "INSERT INTO inv_agent(name,platform,host,ssh_user,ssh_secret_ref,comments,last_editor,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,datetime('now')) "
             "ON CONFLICT(name) DO UPDATE SET platform=excluded.platform, host=excluded.host, "
             "ssh_user=excluded.ssh_user, ssh_secret_ref=excluded.ssh_secret_ref, "
-            "last_editor=excluded.last_editor, updated_at=datetime('now')",
-            (name, platform or "linux", host, ssh_user, ssh_secret_ref, editor))
+            "comments=CASE WHEN excluded.last_editor!='' THEN excluded.comments ELSE inv_agent.comments END, "
+            "last_editor=CASE WHEN excluded.last_editor!='' THEN excluded.last_editor ELSE inv_agent.last_editor END, "
+            "updated_at=CASE WHEN excluded.last_editor!='' THEN datetime('now') ELSE inv_agent.updated_at END",
+            (name, platform or "linux", host, ssh_user, ssh_secret_ref, comments, editor))
 
-    def upsert_inv_agent(self, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", editor=""):
+    def upsert_inv_agent(self, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", comments="", editor=""):
         with self._lock:
-            self._inv_agent_cur(self.con.cursor(), name, platform, host, ssh_user, ssh_secret_ref, editor)
+            self._inv_agent_cur(self.con.cursor(), name, platform, host, ssh_user, ssh_secret_ref, comments, editor)
             self.con.commit()
 
     def delete_inv_agent(self, name):
@@ -639,7 +643,7 @@ class Repo:
     def list_inv_boards(self) -> list[dict]:
         with self._lock:
             boards = [dict(r) for r in self._all(
-                "SELECT name,model,serial,last_editor,updated_at FROM inv_board ORDER BY name")]
+                "SELECT name,model,serial,comments,last_editor,updated_at FROM inv_board ORDER BY name")]
             for b in boards:
                 b["benches"] = [x["name"] for x in self._all(
                     "SELECT b2.name FROM bench_board bb JOIN bench b2 ON b2.id=bb.bench_id "
@@ -651,11 +655,13 @@ class Repo:
         # inventory board = name/model/serial only. mgmt/creds are bench wiring now; the legacy
         # inv_board.mgmt_* columns are left untouched (ignored) for backward-compatible restores.
         cur.execute(
-            "INSERT INTO inv_board(name,model,serial,last_editor,updated_at) "
-            "VALUES(?,?,?,?,datetime('now')) "
+            "INSERT INTO inv_board(name,model,serial,comments,last_editor,updated_at) "
+            "VALUES(?,?,?,?,?,datetime('now')) "
             "ON CONFLICT(name) DO UPDATE SET model=excluded.model, serial=excluded.serial, "
-            "last_editor=excluded.last_editor, updated_at=datetime('now')",
-            (name, data.get("model", ""), data.get("serial", ""), editor))
+            "comments=CASE WHEN excluded.last_editor!='' THEN excluded.comments ELSE inv_board.comments END, "
+            "last_editor=CASE WHEN excluded.last_editor!='' THEN excluded.last_editor ELSE inv_board.last_editor END, "
+            "updated_at=CASE WHEN excluded.last_editor!='' THEN datetime('now') ELSE inv_board.updated_at END",
+            (name, data.get("model", ""), data.get("serial", ""), data.get("comments", ""), editor))
 
     def upsert_inv_board(self, name, data: dict, editor=""):
         with self._lock:

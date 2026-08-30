@@ -970,12 +970,12 @@ async function createManualTest(){
 async function renderInventory(m){
   const [agents,boards,drivers,actions]=await Promise.all([j("/api/inventory/agents"),j("/api/inventory/boards"),j("/api/inventory/drivers"),j("/api/inventory/actions")]);
   let h='<div class="panel"><div class="sec-title">Inventory · Nodes '+hlp("Shared, reusable bench nodes (e.g. a console-server node, a craft node, a power-control node). Benches import these by name and wire which node serves a board's console/craft. NOT the dev/tester Agent (ADMIN › Agents). Public — any user edits.")+'</div><button class="act" onclick="editInvNode(null)">+ New node</button>';
-  h+='<table style="margin-top:12px"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Secret ref</th><th>Test</th><th>Benches</th><th>Edited by</th><th></th></tr>';
-  agents.forEach(a=>h+=`<tr><td class="req">${esc(a.name)}</td><td class="muted">${esc(a.platform)}</td><td class="muted">${esc(a.host||"—")}</td><td class="muted">${esc(a.ssh_user||"—")}</td><td class="muted">${esc(a.ssh_secret_ref||"—")}</td><td>${invPingCell("pn-"+cssid(a.name),a.host)}</td><td>${invBenches(a)}</td><td class="muted">${invEditor(a)}</td><td><a onclick="editInvNode('${esc(a.name)}')">edit</a> · <a onclick="delInvAgent('${esc(a.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
+  h+='<table style="margin-top:12px"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Secret ref</th><th>Test</th><th>Benches</th><th>Comments</th><th>Edited by</th><th></th></tr>';
+  agents.forEach(a=>h+=`<tr><td class="req">${esc(a.name)}</td><td class="muted">${esc(a.platform)}</td><td class="muted">${esc(a.host||"—")}</td><td class="muted">${esc(a.ssh_user||"—")}</td><td class="muted">${esc(a.ssh_secret_ref||"—")}</td><td>${invPingCell("pn-"+cssid(a.name),a.host)}</td><td>${invBenches(a)}</td><td class="muted">${invComment(a)}</td><td class="muted">${invEditor(a)}</td><td><a onclick="editInvNode('${esc(a.name)}')">edit</a> · <a onclick="delInvAgent('${esc(a.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
   h+=(agents.length?'':'<tr><td colspan="9" class="muted">no nodes</td></tr>')+'</table></div>';
   h+='<div class="panel"><div class="sec-title">Inventory · Boards '+hlp("Shared boards — just name, model and serial. The connection info (drivers, creds) is bench wiring, set in the bench editor.")+'</div><button class="act" onclick="editInvBoard(null)">+ New board</button>';
-  h+='<table style="margin-top:12px"><tr><th>Name</th><th>Model</th><th>Serial</th><th>Benches</th><th>Edited by</th><th></th></tr>';
-  boards.forEach(b=>h+=`<tr><td class="req">${esc(b.name)}</td><td><span class="pill">${esc(b.model||"—")}</span></td><td class="muted">${esc(b.serial||"—")}</td><td>${invBenches(b)}</td><td class="muted">${invEditor(b)}</td><td><a onclick="editInvBoard('${esc(b.name)}')">edit</a> · <a onclick="delInvBoard('${esc(b.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
+  h+='<table style="margin-top:12px"><tr><th>Name</th><th>Model</th><th>Serial</th><th>Benches</th><th>Comments</th><th>Edited by</th><th></th></tr>';
+  boards.forEach(b=>h+=`<tr><td class="req">${esc(b.name)}</td><td><span class="pill">${esc(b.model||"—")}</span></td><td class="muted">${esc(b.serial||"—")}</td><td>${invBenches(b)}</td><td class="muted">${invComment(b)}</td><td class="muted">${invEditor(b)}</td><td><a onclick="editInvBoard('${esc(b.name)}')">edit</a> · <a onclick="delInvBoard('${esc(b.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
   h+=(boards.length?'':'<tr><td colspan="6" class="muted">no boards</td></tr>')+'</table></div>';
   // Drivers (reusable comm-channel entities)
   h+='<div class="panel"><div class="sec-title">Inventory · Driver types '+hlp("Driver types = a name + its prop names. serial (console) and ip (network target) are built-in and carry the channels. A bench instantiates a type on a board, giving it an alias (ctx key) + values for the props.")+'</div><button class="act" onclick="editInvDriver(null)">+ New driver type</button>';
@@ -990,6 +990,8 @@ async function renderInventory(m){
   m.innerHTML=h;
 }
 function invEditor(x){ return x.last_editor?`<span title="${esc(x.updated_at||'')}">${esc(x.last_editor)}</span>`:"—"; }
+function invComment(x){ const c=(x.comments||"").trim(); if(!c)return "—";
+  const short=c.length>40?c.slice(0,40)+"…":c; return `<span title="${esc(c)}">${esc(short)}</span>`; }
 function invBenches(x){ const b=x.benches||[]; return b.length?b.map(n=>`<span class="pill">${esc(n)}</span>`).join(" "):'<span class="muted">—</span>'; }
 function invPingCell(id,target){ return target
   ? `<a title="ping ${esc(target)}" onclick="invPing('${id}','${esc(target)}')">📶</a> <span id="${id}" class="muted"></span>`
@@ -1013,12 +1015,13 @@ async function editInvNode(name){
   h+=`<div class="grid2"><div class="field"><label>Host</label><input class="f" id="in-host" value="${esc(a.host||"")}" placeholder="192.0.2.201"></div>`
     +`<div class="field"><label>SSH user</label><input class="f" id="in-user" value="${esc(a.ssh_user||"")}" placeholder="user"></div></div>`;
   h+=`<div class="field"><label>Secret ref ${hlp("Points to the vault; set the value under Admin › Secrets. Empty = key-based SSH.")}</label><input class="f" id="in-ref" value="${esc(a.ssh_secret_ref||"")}" placeholder="node1"></div>`;
+  h+=`<div class="field"><label>Comments ${hlp("Free-form notes about this node for other users. The last editor is recorded.")}</label><textarea class="f" id="in-comments" rows="2" placeholder="e.g. bench-side node bridging the console">${esc(a.comments||"")}</textarea></div>`;
   h+=`<div class="form-actions"><button class="act" onclick="saveInvNode('${esc(name||"")}')">Save</button><button class="btn-ghost" onclick="closeModal()">Cancel</button><span id="in-msg" class="muted"></span></div>`;
   openModal(h);
 }
 async function saveInvNode(orig){
   const name=(orig||$("#in-name").value||"").trim(); if(!name){$("#in-msg").textContent="need name";return;}
-  const body={name,platform:$("#in-plat").value,host:$("#in-host").value,ssh_user:$("#in-user").value,ssh_secret_ref:$("#in-ref").value};
+  const body={name,platform:$("#in-plat").value,host:$("#in-host").value,ssh_user:$("#in-user").value,ssh_secret_ref:$("#in-ref").value,comments:$("#in-comments").value};
   const r=await adminFetch("/api/inventory/agents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ closeModal(); render("st-inventory"); } else $("#in-msg").textContent="error"; }
 async function delInvAgent(n){ if(!confirm("Delete node "+n+"?"))return; await adminFetch("/api/inventory/agents/"+encodeURIComponent(n),{method:"DELETE"}); render("st-inventory"); }
@@ -1033,12 +1036,13 @@ async function editInvBoard(name){
   h+=`<div class="grid2"><div class="field"><label>Name</label><input class="f" id="ib-name" value="${esc(b.name||"")}" ${name?"readonly":""}></div>`
     +`<div class="field"><label>Model</label><select class="f" id="ib-model">${modelOpts}</select></div></div>`;
   h+=`<div class="field"><label>Serial</label><input class="f" id="ib-serial" value="${esc(b.serial||"")}"></div>`;
+  h+=`<div class="field"><label>Comments ${hlp("Free-form notes about this board for other users. The last editor is recorded.")}</label><textarea class="f" id="ib-comments" rows="2" placeholder="e.g. RMA unit, flaky NIC — see ticket">${esc(b.comments||"")}</textarea></div>`;
   h+=`<div class="form-actions"><button class="act" onclick="saveInvBoard('${esc(name||"")}')">Save</button><button class="btn-ghost" onclick="closeModal()">Cancel</button><span id="ib-msg" class="muted"></span></div>`;
   openModal(h);
 }
 async function saveInvBoard(orig){
   const name=(orig||$("#ib-name").value||"").trim(); if(!name){$("#ib-msg").textContent="need name";return;}
-  const body={name,model:$("#ib-model").value,serial:$("#ib-serial").value};
+  const body={name,model:$("#ib-model").value,serial:$("#ib-serial").value,comments:$("#ib-comments").value};
   const r=await adminFetch("/api/inventory/boards",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ closeModal(); render("st-inventory"); } else $("#ib-msg").textContent="error"; }
 async function delInvBoard(n){ if(!confirm("Delete board "+n+"?"))return; await adminFetch("/api/inventory/boards/"+encodeURIComponent(n),{method:"DELETE"}); render("st-inventory"); }

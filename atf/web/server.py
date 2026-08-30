@@ -1049,7 +1049,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             raise HTTPException(400, "need name")
         repo.upsert_inv_agent(body["name"], body.get("platform", "linux"), body.get("host", ""),
                               body.get("ssh_user", ""), body.get("ssh_secret_ref", ""),
-                              editor=me["username"])
+                              comments=body.get("comments", ""), editor=me["username"])
         return {"ok": True}
 
     @app.delete("/api/inventory/agents/{name}")

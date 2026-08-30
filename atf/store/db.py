@@ -36,9 +36,11 @@ def migrate(con: sqlite3.Connection) -> None:
     _add_columns(con, "report", {"select_json": "TEXT NOT NULL DEFAULT '{}'",
                                  "meta_json": "TEXT NOT NULL DEFAULT '{}'"})
     _add_columns(con, "inv_agent", {"last_editor": "TEXT NOT NULL DEFAULT ''",
-                                    "updated_at": "TEXT NOT NULL DEFAULT ''"})
+                                    "updated_at": "TEXT NOT NULL DEFAULT ''",
+                                    "comments": "TEXT NOT NULL DEFAULT ''"})
     _add_columns(con, "inv_board", {"last_editor": "TEXT NOT NULL DEFAULT ''",
-                                    "updated_at": "TEXT NOT NULL DEFAULT ''"})
+                                    "updated_at": "TEXT NOT NULL DEFAULT ''",
+                                    "comments": "TEXT NOT NULL DEFAULT ''"})
     _add_columns(con, "check_source", {"token_enc": "TEXT NOT NULL DEFAULT ''",
                                        "kind": "TEXT NOT NULL DEFAULT 'git'",
                                        "last_commit": "TEXT", "last_sync_by": "TEXT"})

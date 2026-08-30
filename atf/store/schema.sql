@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS inv_agent (
   host           TEXT NOT NULL DEFAULT '',
   ssh_user       TEXT NOT NULL DEFAULT '',
   ssh_secret_ref TEXT NOT NULL DEFAULT '',
+  comments       TEXT NOT NULL DEFAULT '',
   last_editor    TEXT NOT NULL DEFAULT '',
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -147,6 +148,7 @@ CREATE TABLE IF NOT EXISTS inv_board (
   mgmt_ip      TEXT,
   mgmt_prefix  INTEGER,
   mgmt_gateway TEXT,
+  comments    TEXT NOT NULL DEFAULT '',
   last_editor TEXT NOT NULL DEFAULT '',
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
