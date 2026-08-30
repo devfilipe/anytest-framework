@@ -1297,11 +1297,28 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         from atf.core.registry import resolve_selection
         from atf.core.runner import available_actions, available_drivers
         s = repo.get_suite(body.get("suite")) or {}
-        specs = resolve_selection(s.get("select") or {})
+        sel = s.get("select") or {}
+        specs = resolve_selection(sel)
         need_d, need_a = set(), set()
         for sp in specs:
             need_d |= set(sp.drivers)
             need_a |= set(sp.actions)
+        # The server registry may not hold the plan's checks — they can be provided by a connected
+        # agent (the run falls back to it). Cover any plan test id the server didn't resolve by
+        # reading that check's driver/action needs from the connected agents' advertised catalogs,
+        # so the precheck reflects what the run will actually require (not a false "needs none").
+        plan_ids = []
+        if isinstance(sel.get("requirements"), list) and sel["requirements"] and isinstance(sel["requirements"][0], dict):
+            for req in sel["requirements"]:
+                plan_ids += [t["id"] for t in (req.get("tests") or []) if t.get("id")]
+        plan_ids += [i for i in (sel.get("include") or sel.get("ids") or []) if i]
+        uncovered = {i for i in plan_ids if i not in {sp.id for sp in specs}}
+        if uncovered:
+            for a in hub.alive():
+                for c in (a.catalog or []):
+                    if c.get("id") in uncovered:
+                        need_d |= set(c.get("drivers") or [])
+                        need_a |= set(c.get("actions") or [])
         have_d, have_a = set(), set()
         try:
             bench = repo.inventory_bench(body.get("bench"))
