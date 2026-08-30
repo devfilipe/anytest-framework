@@ -28,10 +28,10 @@ def test_board_has_no_mgmt_attr():
 def test_available_drivers_gating_by_type():
     from atf.core import inventory
     from atf.core.runner import available_drivers
-    data = {"agents": {"rpi": {"platform": "linux", "host": "x", "ssh": {"user": "pi"}}},
+    data = {"agents": {"node1": {"platform": "linux", "host": "x", "ssh": {"user": "user"}}},
             "boards": [{"name": "b", "model": "m", "creds": {},
-                        "drivers": {"console": {"type": "serial", "agent": "rpi"},
-                                    "craft": {"type": "ip", "agent": "rpi"},
+                        "drivers": {"console": {"type": "serial", "agent": "node1"},
+                                    "craft": {"type": "ip", "agent": "node1"},
                                     "mgmt": {"type": "ip"},                       # ip, no agent
                                     "orphan": {"type": "serial", "agent": "gone"}}}]}
     board = inventory.parse(data, {}).boards[0]

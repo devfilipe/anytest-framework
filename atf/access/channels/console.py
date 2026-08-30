@@ -1,8 +1,8 @@
 """SerialChannel — driver type "serial": a board serial console via an agent.
 
 send/expect/login/sh over the serial line. The OS-specific serial bridge lives in
-AgentConn.serial_stream (socat on linux, plink on windows), so it can be driven from a Pi or a
-notebook alike. Transport per driver config: `ssh` (bridge over the agent) or `ser2net` (raw TCP
+AgentConn.serial_stream (socat on linux, plink on windows), so it can be driven from any agent
+(Linux or Windows) alike. Transport per driver config: `ssh` (bridge over the agent) or `ser2net` (raw TCP
 socket to the agent). The typical alias is `console`; it is the only driver on an IP-less board.
 """
 from __future__ import annotations

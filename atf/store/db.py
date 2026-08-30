@@ -51,7 +51,7 @@ def migrate(con: sqlite3.Connection) -> None:
     # instantiates one on a board with an alias (ctx key) + values. serial + ip carry the channels.
     import json as _json
     _serial = _json.dumps([
-        {"name": "agent", "description": "The bench node (Pi/notebook) that bridges the serial console."},
+        {"name": "agent", "description": "The bench node (an agent) that bridges the serial console."},
         {"name": "transport", "description": "ssh (serial over the agent) or ser2net (raw TCP socket)."},
         {"name": "device", "description": "Serial device on the agent, e.g. /dev/ttyUSB0."},
         {"name": "baud", "description": "Serial baud rate, e.g. 115200."},

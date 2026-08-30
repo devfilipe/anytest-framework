@@ -789,18 +789,18 @@ async function doImportReqs(){
 }
 
 const BENCH_TMPL=`agents:
-  rpi: { platform: linux, host: 192.0.2.10, ssh: { user: pi, password_ref: pi } }
+  node1: { platform: linux, host: 192.0.2.10, ssh: { user: user, password_ref: node1 } }
 boards:
   - name: board-1
     model: Router-X Lite
-    mgmt: { ip: 192.0.2.20, prefix: 16, gateway: 192.0.2.1 }
     creds:
       root:  { user: root,  password_ref: root }
       admin: { user: admin, password_ref: admin }
     drivers:
-      console: { agent: rpi, transport: ssh, serial: { dev: /dev/ttyUSB0, baud: 115200 } }
+      mgmt:    { type: ip, ip: 192.0.2.20 }
+      console: { agent: node1, type: serial, transport: ssh, device: /dev/ttyUSB0, baud: 115200 }
     actions:
-      power-cycle: { agent: power-pi, signals: { off: 'curl -s ".../Power1%20off"', on: 'curl -s ".../Power1%20on"' } }
+      power-cycle: { agent: power-node, signals: { off: 'curl -s ".../Power1%20off"', on: 'curl -s ".../Power1%20on"' } }
 `;
 const SUITE_TMPL=`title: "My plan"
 select:
@@ -969,7 +969,7 @@ async function createManualTest(){
 // ---- STUDIO › Inventory (shared agents + boards; benches import these) ----
 async function renderInventory(m){
   const [agents,boards,drivers,actions]=await Promise.all([j("/api/inventory/agents"),j("/api/inventory/boards"),j("/api/inventory/drivers"),j("/api/inventory/actions")]);
-  let h='<div class="panel"><div class="sec-title">Inventory · Nodes '+hlp("Shared, reusable bench nodes (Pi console server, craft notebook, power-control Pi). Benches import these by name and wire which node serves a board's console/craft. NOT the dev/tester Agent (ADMIN › Agents). Public — any user edits.")+'</div><button class="act" onclick="editInvNode(null)">+ New node</button>';
+  let h='<div class="panel"><div class="sec-title">Inventory · Nodes '+hlp("Shared, reusable bench nodes (e.g. a console-server node, a craft node, a power-control node). Benches import these by name and wire which node serves a board's console/craft. NOT the dev/tester Agent (ADMIN › Agents). Public — any user edits.")+'</div><button class="act" onclick="editInvNode(null)">+ New node</button>';
   h+='<table style="margin-top:12px"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Secret ref</th><th>Test</th><th>Benches</th><th>Edited by</th><th></th></tr>';
   agents.forEach(a=>h+=`<tr><td class="req">${esc(a.name)}</td><td class="muted">${esc(a.platform)}</td><td class="muted">${esc(a.host||"—")}</td><td class="muted">${esc(a.ssh_user||"—")}</td><td class="muted">${esc(a.ssh_secret_ref||"—")}</td><td>${invPingCell("pn-"+cssid(a.name),a.host)}</td><td>${invBenches(a)}</td><td class="muted">${invEditor(a)}</td><td><a onclick="editInvNode('${esc(a.name)}')">edit</a> · <a onclick="delInvAgent('${esc(a.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
   h+=(agents.length?'':'<tr><td colspan="9" class="muted">no nodes</td></tr>')+'</table></div>';
@@ -1008,11 +1008,11 @@ async function editInvNode(name){
   const a=name?agents.find(x=>x.name===name)||{}:{name:"",platform:"linux",host:"",ssh_user:"",ssh_secret_ref:""};
   const platOpts=["linux","windows"].map(p=>`<option ${p===(a.platform||"linux")?'selected':''}>${p}</option>`).join("");
   let h=`<h2>${name?"Node · "+esc(name):"New node"}</h2>`;
-  h+=`<div class="grid2"><div class="field"><label>Name</label><input class="f" id="in-name" value="${esc(a.name||"")}" ${name?"readonly":""} placeholder="rpi"></div>`
+  h+=`<div class="grid2"><div class="field"><label>Name</label><input class="f" id="in-name" value="${esc(a.name||"")}" ${name?"readonly":""} placeholder="node1"></div>`
     +`<div class="field"><label>Platform</label><select class="f" id="in-plat">${platOpts}</select></div></div>`;
   h+=`<div class="grid2"><div class="field"><label>Host</label><input class="f" id="in-host" value="${esc(a.host||"")}" placeholder="192.0.2.201"></div>`
-    +`<div class="field"><label>SSH user</label><input class="f" id="in-user" value="${esc(a.ssh_user||"")}" placeholder="pi"></div></div>`;
-  h+=`<div class="field"><label>Secret ref ${hlp("Points to the vault; set the value under Admin › Secrets. Empty = key-based SSH.")}</label><input class="f" id="in-ref" value="${esc(a.ssh_secret_ref||"")}" placeholder="pi"></div>`;
+    +`<div class="field"><label>SSH user</label><input class="f" id="in-user" value="${esc(a.ssh_user||"")}" placeholder="user"></div></div>`;
+  h+=`<div class="field"><label>Secret ref ${hlp("Points to the vault; set the value under Admin › Secrets. Empty = key-based SSH.")}</label><input class="f" id="in-ref" value="${esc(a.ssh_secret_ref||"")}" placeholder="node1"></div>`;
   h+=`<div class="form-actions"><button class="act" onclick="saveInvNode('${esc(name||"")}')">Save</button><button class="btn-ghost" onclick="closeModal()">Cancel</button><span id="in-msg" class="muted"></span></div>`;
   openModal(h);
 }
@@ -1137,11 +1137,11 @@ function reRenderBench(){
              `<button class="btn-ghost" onclick="benchYamlMode()">YAML mode</button>`);
 }
 function agentRow(i){ const a=CFG.agents[i];
-  return `<tr><td><input class="f" value="${esc(a.name)}" oninput="CFG.agents[${i}].name=this.value" placeholder="rpi"></td>`
+  return `<tr><td><input class="f" value="${esc(a.name)}" oninput="CFG.agents[${i}].name=this.value" placeholder="node1"></td>`
    +`<td style="width:110px"><select class="f" onchange="CFG.agents[${i}].platform=this.value"><option${a.platform==='linux'?' selected':''}>linux</option><option${a.platform==='windows'?' selected':''}>windows</option></select></td>`
    +`<td><input class="f" value="${esc(a.host)}" oninput="CFG.agents[${i}].host=this.value" placeholder="192.0.2.201"></td>`
-   +`<td><input class="f" value="${esc(a.user)}" oninput="CFG.agents[${i}].user=this.value" placeholder="pi"></td>`
-   +`<td><input class="f" value="${esc(a.ref)}" oninput="CFG.agents[${i}].ref=this.value" placeholder="pi"></td>`
+   +`<td><input class="f" value="${esc(a.user)}" oninput="CFG.agents[${i}].user=this.value" placeholder="user"></td>`
+   +`<td><input class="f" value="${esc(a.ref)}" oninput="CFG.agents[${i}].ref=this.value" placeholder="node1"></td>`
    +`<td style="width:34px"><button class="btn-ghost" onclick="rmAgent(${i})" title="remove">✕</button></td></tr>`; }
 function agentOpts(sel){ return CFG.agents.map(a=>`<option ${a.name===sel?'selected':''}>${esc(a.name)}</option>`).join(""); }
 function driverBlock(i){ const ds=CFG.boards[i].drivers||[];
@@ -1212,7 +1212,7 @@ function boardCard(i){ const b=CFG.boards[i];
 function benchBody(){ const isNew=!CFGNAME;
   let h='';
   h+=`<div class="panel"><div class="field" style="max-width:340px;margin:0"><label>Bench name ${hlp("Rename allowed — saving under a new name recreates the bench (same inventory) and removes the old one.")}</label><input class="f" value="${esc(CFG._name||'')}" oninput="CFG._name=this.value" placeholder="lab-b"></div></div>`;
-  h+=`<div class="panel"><div class="sec-title">Nodes ${hlp("Bench nodes that bridge access to the board — the Pi (serial console), the craft notebook, the power-control Pi. (Not the dev/tester Agent under ADMIN.) Import shared nodes from the Inventory or define a new one; new ones are added to the inventory on save. Which node serves a board's console/craft is wired per-board below.")}</div><table class="itable"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Password ref</th><th></th></tr>`
+  h+=`<div class="panel"><div class="sec-title">Nodes ${hlp("Bench nodes that bridge access to the board — e.g. a console-server node, a craft node, a power-control node. (Not the dev/tester Agent under ADMIN.) Import shared nodes from the Inventory or define a new one; new ones are added to the inventory on save. Which node serves a board's console/craft is wired per-board below.")}</div><table class="itable"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Password ref</th><th></th></tr>`
     +CFG.agents.map((_,i)=>agentRow(i)).join('')+`</table><div class="row" style="margin-top:8px"><button class="btn-ghost" onclick="addAgent()">+ new node</button>`
     +invImportSelect(INV_AGENTS,CFG.agents.map(a=>a.name),"importInvAgent")+`</div></div>`;
   h+=`<div class="panel"><div class="sec-title">Boards ${hlp("Import shared boards from the Inventory, or define a new one. Drivers/actions (the wiring) belong to THIS bench.")}</div>`+CFG.boards.map((_,i)=>boardCard(i)).join('')

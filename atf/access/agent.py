@@ -3,7 +3,7 @@
 This is what decouples the AGENT (a node with a platform) from the VECTOR: the console
 and craft channels are vector logic; the OS-specific bits (ping, tcp scan, serial bridge)
 live here and dispatch on `agent.platform` (linux | windows). So any agent can serve any
-vector — console from the notebook, craft from the Pi, etc.
+vector — the console/craft binding chooses which agent bridges it, whatever machine that is.
 """
 from __future__ import annotations
 

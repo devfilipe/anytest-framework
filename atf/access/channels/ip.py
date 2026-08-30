@@ -1,7 +1,7 @@
 """IpChannel — driver type "ip": reach a board over the network at ``config["ip"]``.
 
 Unifies the old craft + mgmt vantages, chosen by whether the driver has an **agent**:
-  - **with agent**  → probe from that agent's L2 vantage (the old craft: what a laptop on the
+  - **with agent**  → probe from that agent's L2 vantage (the old craft: what a host on the
     segment sees) via ``AgentConn.ping``/``tcp_scan``.
   - **without agent** → probe from the host / the atf-mgmt container (the old mgmt): ``nmap`` for
     scan/NSE and paramiko SSH for a board shell, using the bench-provided creds.

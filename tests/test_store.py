@@ -40,12 +40,12 @@ def test_action_entity_crud(store):
 
 
 def test_bench_roundtrip_driver_type_alias_and_creds(store):
-    data = {"agents": {"rpi": {"platform": "linux", "host": "192.0.2.1",
-                               "ssh": {"user": "pi", "password_ref": "pi"}}},
+    data = {"agents": {"node1": {"platform": "linux", "host": "192.0.2.1",
+                               "ssh": {"user": "user", "password_ref": "node1"}}},
             "boards": [{"name": "b1", "model": "router-x", "serial": "1",
                         "creds": {"root": {"user": "root", "password_ref": "root"}},
                         "drivers": {"mgmt": {"driver_name": "ip", "agent": "", "ip": "127.0.0.1"},
-                                    "console": {"driver_name": "serial", "agent": "rpi",
+                                    "console": {"driver_name": "serial", "agent": "node1",
                                                 "device": "/dev/ttyUSB0", "baud": 115200}}}]}
     store.upsert_bench("b", data)
     bd = store.get_bench("b")["boards"][0]
@@ -74,7 +74,7 @@ def test_legacy_driver_migration(store):
     con.execute("INSERT INTO bench_vector(bench_id,board_name,vector,driver_name,config_json) VALUES(?,?,?,?,?)",
                 (bid, "bd", "mgmt", "", "{}"))
     con.execute("INSERT INTO bench_vector(bench_id,board_name,vector,driver_name,config_json) VALUES(?,?,?,?,?)",
-                (bid, "bd", "console", "", json.dumps({"agent": "rpi"})))
+                (bid, "bd", "console", "", json.dumps({"agent": "node1"})))
     con.commit()
     assert store.migrate_drivers_to_inventory() == 2
     bd = store.get_bench("lb")["boards"][0]

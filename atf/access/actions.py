@@ -8,7 +8,7 @@ agent):
 
     actions:
       power-cycle:
-        agent: power-pi
+        agent: power-node
         signals: { off: 'curl -s ".../Power1%20off"', on: 'curl -s ".../Power1%20on"',
                    status: 'curl -s ".../Power1"' }
 
