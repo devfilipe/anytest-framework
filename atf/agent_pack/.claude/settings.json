@@ -1,0 +1,16 @@
+{
+  "enabledMcpjsonServers": ["atf"],
+  "permissions": {
+    "allow": [
+      "mcp__atf__atf_catalog",
+      "mcp__atf__atf_suites",
+      "mcp__atf__atf_scaffold",
+      "mcp__atf__atf_run",
+      "mcp__atf__atf_report",
+      "mcp__atf__atf_api",
+      "Read",
+      "Edit",
+      "Write"
+    ]
+  }
+}

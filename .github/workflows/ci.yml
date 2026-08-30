@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + fast tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[host,web,test]" ruff
+
+      - name: Lint (ruff)
+        run: ruff check atf
+
+      - name: Import sanity
+        run: python -m compileall -q atf && python -m atf.cli list
+
+      - name: Regression suite (fast, no docker)
+        env:
+          APP_SECRET: ci-secret
+        run: python -m pytest -q -m "not integration"
+
+      - name: Run the example check-source
+        env:
+          APP_SECRET: ci-secret
+          ATF_CHECK_SOURCES: ${{ github.workspace }}/examples
+        run: |
+          python -m atf.cli run --id host-recon \
+            --bench examples/benches/lab.yaml --mgmt-backend local --out /tmp/atf-ci
+          test -f /tmp/atf-ci/results.json
+
+  integration:
+    name: integration (Docker + anytest-checks-common)
+    runs-on: ubuntu-latest        # ubuntu runners ship Docker + compose v2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: anytest-framework
+
+      - uses: actions/checkout@v4
+        with:
+          repository: devfilipe/anytest-checks-common
+          path: anytest-checks-common
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        working-directory: anytest-framework
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[host,web,test]"
+
+      - name: Integration test (baseline suite vs the vulnerable target)
+        working-directory: anytest-framework
+        env:
+          APP_SECRET: ci-secret
+        run: python -m pytest -v -m integration

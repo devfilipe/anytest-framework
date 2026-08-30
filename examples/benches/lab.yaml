@@ -1,0 +1,18 @@
+# Example bench inventory. A bench is the WHERE — the boards under test and the agents
+# that bridge each driver to them. The same suite/checks run against any bench.
+#
+# This minimal bench has one board reachable from the host running the framework, so the
+# `host-recon` example check runs with no agents and no secrets:
+#
+#   ATF_CHECK_SOURCES=$PWD/examples \
+#     atf run --id host-recon --bench examples/benches/lab.yaml --mgmt-backend local
+#
+# A board instantiates drivers (comm channels). An `ip` driver carries the target address; an
+# `ip` driver WITHOUT an agent is probed from the host/container (nmap). Add an `agent:` to a driver
+# (and an `agents:` block) for a console (type serial) or an agent-vantage probe.
+
+boards:
+  - name: board-1
+    model: router-x
+    drivers:
+      mgmt: { type: ip, ip: 127.0.0.1 }   # ctx.mgmt.ip; 127.0.0.1 = demo against localhost

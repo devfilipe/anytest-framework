@@ -1,0 +1,36 @@
+# --- secrets (never commit) ---
+*.secrets.yaml
+secrets.yaml
+.env
+.env.local
+
+# --- runtime / generated ---
+reports/
+checkouts/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# --- tooling caches ---
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# --- editor / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# --- local Claude Code overrides (keep shared .claude/ tracked) ---
+.claude/settings.local.json
+
+# local design notes — not part of the published repo
+docs/
