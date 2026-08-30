@@ -19,6 +19,10 @@ from pathlib import Path
 
 _SKIP = {".git", "__pycache__", ".venv", ".ruff_cache", "reports", "node_modules"}
 
+# Agent build/command-surface version. Bump when the set of poll commands the agent understands
+# changes; the server surfaces it (Admin › Agents) so an outdated agent is visible at a glance.
+AGENT_PROTO = 1
+
 
 def _git(path: Path, *args: str) -> str:
     try:
@@ -360,7 +364,7 @@ def run(server: str, token: str, sources: list[str], name: str) -> int:
             print(f"warning: {p} has no atf_checks/ — not a check-source repo")
     src_info = [_source_info(p) for p in paths]
     reg = {"name": name or platform.node(), "token": token, "sources": src_info,
-           "vantages": {}, "platform": platform.system(),
+           "vantages": {}, "platform": platform.system(), "proto": AGENT_PROTO,
            "catalog": _catalog(paths), "req_files": _requirement_files(paths)}
 
     aid = None
@@ -425,6 +429,15 @@ def run(server: str, token: str, sources: list[str], name: str) -> int:
                 res = _ai_run(cmd.get("path", ""), cmd.get("prompt", ""), resume=cmd.get("resume"),
                               unrestricted=cmd.get("unrestricted", True), model=cmd.get("model", ""))
                 _post(f"{server}/api/agents/{aid}/file?token={cmd['token']}", res)
+            elif cmd.get("cmd") not in (None, "noop"):
+                # An unknown command means the server speaks a newer protocol than this agent build.
+                # Confirm the failure right away (if it carries a result token) so the server returns a
+                # clear error instead of hanging until timeout, and tell the operator to update.
+                unknown = cmd.get("cmd")
+                print(f"  ⚠ unknown command '{unknown}' — update this agent: curl {server}/agent.py")
+                if cmd.get("token"):
+                    _post(f"{server}/api/agents/{aid}/file?token={cmd['token']}",
+                          {"ok": False, "error": f"agent too old for '{unknown}' — reconnect to update"})
         except urllib.error.HTTPError as e:
             if e.code == 404:                     # server forgot us (restart/TTL) — re-register
                 aid = None

@@ -1637,7 +1637,8 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         if not owner:
             raise HTTPException(401, "bad agent token")
         s = hub.register(body.get("name", "agent"), body.get("sources"), body.get("vantages"),
-                         body.get("platform", ""), body.get("catalog"), body.get("req_files"), owner=owner)
+                         body.get("platform", ""), body.get("catalog"), body.get("req_files"), owner=owner,
+                         proto=int(body.get("proto") or 0))
         return {"id": s.id}
 
     @app.get("/api/agents/{aid}/poll")                  # agent long-polls for commands
@@ -1784,7 +1785,9 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         utok = authorization[7:].strip() if authorization[:7].lower() == "bearer " else ""
         tok, ev = hub.request_ai(s, path, base64.b64encode(buf.getvalue()).decode(), "", utok)
         if not ev.wait(timeout=25) or s.files[tok]["data"] is None:
-            raise HTTPException(504, "agent did not confirm AI enable")
+            raise HTTPException(504, "the agent didn't confirm AI enable within 25s — it may be an "
+                                     "older build that doesn't support AI. Restart the agent so it "
+                                     "re-downloads (curl <server>/agent.py), or check its console for errors.")
         d = s.files[tok]["data"]
         if not d.get("ok"):
             raise HTTPException(400, d.get("error", "ai enable failed"))

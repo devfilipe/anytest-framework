@@ -489,7 +489,8 @@ python3 atf-agent.py --server ${esc(origin)} --token ${esc(tok)} \\
         +(aiOn&&!a.ai.claude?`<span class="badge warn" title="Install Claude Code on the agent machine to use the Wizard">no claude CLI</span> `:'')
         +`<button class="btn-danger" onclick="disconnectAgent('${esc(a.id)}','${esc(a.name)}')">Disconnect</button>`
       : '<span class="muted">—</span>';
-    h+=`<tr><td class="req">${esc(a.name)}</td><td>${esc(a.owner||"?")}${a.owner===ADMIN_USER?' <span class="muted">(you)</span>':''}</td><td class="muted">${esc(a.platform)}</td><td>${srcs}</td><td class="muted">${esc(a.idle)}s</td><td>${acts}</td></tr>`;
+    const stale=!a.proto?' <span class="badge warn" title="Older agent build (predates version reporting). If a feature like Connect AI fails, restart the agent so it re-downloads: curl <server>/agent.py">older build</span>':'';
+    h+=`<tr><td class="req">${esc(a.name)}${stale}</td><td>${esc(a.owner||"?")}${a.owner===ADMIN_USER?' <span class="muted">(you)</span>':''}</td><td class="muted">${esc(a.platform)}</td><td>${srcs}</td><td class="muted">${esc(a.idle)}s</td><td>${acts}</td></tr>`;
   });
   h+=(agents.length?'':'<tr><td colspan="6" class="muted">no agents connected — start one with the command above</td></tr>')+'</table></div>';
   m.innerHTML=h;

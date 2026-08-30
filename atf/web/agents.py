@@ -22,10 +22,12 @@ def _now() -> float:
 
 
 class AgentSession:
-    def __init__(self, sid: str, name: str, sources: list, vantages: dict, platform: str, owner: str = ""):
+    def __init__(self, sid: str, name: str, sources: list, vantages: dict, platform: str,
+                 owner: str = "", proto: int = 0):
         self.id = sid
         self.name = name
         self.owner = owner               # the user whose enrollment token this agent registered with
+        self.proto = proto               # agent build/command-surface version (0 = pre-versioning build)
         self.sources = sources          # [{name, repo, branch, dirty, head}]
         self.vantages = vantages         # free-form reachability facts {mgmt:bool, craft:bool, …}
         self.platform = platform
@@ -50,7 +52,7 @@ class AgentSession:
     def info(self) -> dict:
         return {"id": self.id, "name": self.name, "sources": self.sources,
                 "vantages": self.vantages, "platform": self.platform, "owner": self.owner,
-                "ai": self.ai, "idle": round(_now() - self.last_seen, 1)}
+                "proto": self.proto, "ai": self.ai, "idle": round(_now() - self.last_seen, 1)}
 
 
 class AgentHub:
@@ -60,8 +62,9 @@ class AgentHub:
         self.ttl = ttl
 
     def register(self, name: str, sources: list, vantages: dict, platform: str,
-                 catalog: list | None = None, req_files: list | None = None, owner: str = "") -> AgentSession:
-        s = AgentSession(secrets.token_hex(8), name, sources or [], vantages or {}, platform, owner)
+                 catalog: list | None = None, req_files: list | None = None, owner: str = "",
+                 proto: int = 0) -> AgentSession:
+        s = AgentSession(secrets.token_hex(8), name, sources or [], vantages or {}, platform, owner, proto)
         s.catalog = catalog or []
         s.req_files = req_files or []
         s.snapshot()                     # connecting loads the agent's current tree into the app
