@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS inv_agent (
   host           TEXT NOT NULL DEFAULT '',
   ssh_user       TEXT NOT NULL DEFAULT '',
   ssh_secret_ref TEXT NOT NULL DEFAULT '',
+  ssh_port       INTEGER NOT NULL DEFAULT 22,
   comments       TEXT NOT NULL DEFAULT '',
   last_editor    TEXT NOT NULL DEFAULT '',
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))

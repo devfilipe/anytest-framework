@@ -67,7 +67,8 @@ class Repo:
                 a = self._one("SELECT * FROM inv_agent WHERE name=?", (ln["agent_name"],))
                 if a:
                     agents[a["name"]] = {"platform": a["platform"], "host": a["host"],
-                                         "ssh": {"user": a["ssh_user"], "password_ref": a["ssh_secret_ref"]}}
+                                         "ssh": {"user": a["ssh_user"], "password_ref": a["ssh_secret_ref"],
+                                                 "port": a["ssh_port"]}}
             boards = []
             for ln in self._all("SELECT board_name FROM bench_board WHERE bench_id=? ORDER BY board_name", (bid,)):
                 bd = self._one("SELECT * FROM inv_board WHERE name=?", (ln["board_name"],))
@@ -134,7 +135,8 @@ class Repo:
             for an, a in (data.get("agents") or {}).items():
                 ssh = a.get("ssh") or {}
                 self._inv_agent_cur(cur, an, a.get("platform", "linux"), a.get("host", ""),
-                                    ssh.get("user", ""), ssh.get("password_ref", ""))
+                                    ssh.get("user", ""), ssh.get("password_ref", ""),
+                                    ssh_port=ssh.get("port") or 22)
                 cur.execute("INSERT OR IGNORE INTO bench_agent(bench_id,agent_name) VALUES(?,?)", (bid, an))
             for bd in (data.get("boards") or []):
                 # inventory board is name/model/serial only — creds/drivers are bench wiring
@@ -608,7 +610,7 @@ class Repo:
     def list_inv_agents(self) -> list[dict]:
         with self._lock:
             rows = [dict(r) for r in self._all(
-                "SELECT name,platform,host,ssh_user,ssh_secret_ref,comments,last_editor,updated_at "
+                "SELECT name,platform,host,ssh_user,ssh_secret_ref,ssh_port,comments,last_editor,updated_at "
                 "FROM inv_agent ORDER BY name")]
             for a in rows:
                 a["benches"] = [x["name"] for x in self._all(
@@ -617,22 +619,25 @@ class Repo:
             return rows
 
     @staticmethod
-    def _inv_agent_cur(cur, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", comments="", editor=""):
+    def _inv_agent_cur(cur, name, platform="linux", host="", ssh_user="", ssh_secret_ref="",
+                       ssh_port=22, comments="", editor=""):
         # comments/last_editor/updated_at are human metadata: only a real editor (non-empty, from the
         # inventory editor) touches them. Bench-sync passes editor='' and must NOT wipe them.
         cur.execute(
-            "INSERT INTO inv_agent(name,platform,host,ssh_user,ssh_secret_ref,comments,last_editor,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,datetime('now')) "
+            "INSERT INTO inv_agent(name,platform,host,ssh_user,ssh_secret_ref,ssh_port,comments,last_editor,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,datetime('now')) "
             "ON CONFLICT(name) DO UPDATE SET platform=excluded.platform, host=excluded.host, "
-            "ssh_user=excluded.ssh_user, ssh_secret_ref=excluded.ssh_secret_ref, "
+            "ssh_user=excluded.ssh_user, ssh_secret_ref=excluded.ssh_secret_ref, ssh_port=excluded.ssh_port, "
             "comments=CASE WHEN excluded.last_editor!='' THEN excluded.comments ELSE inv_agent.comments END, "
             "last_editor=CASE WHEN excluded.last_editor!='' THEN excluded.last_editor ELSE inv_agent.last_editor END, "
             "updated_at=CASE WHEN excluded.last_editor!='' THEN datetime('now') ELSE inv_agent.updated_at END",
-            (name, platform or "linux", host, ssh_user, ssh_secret_ref, comments, editor))
+            (name, platform or "linux", host, ssh_user, ssh_secret_ref, int(ssh_port or 22), comments, editor))
 
-    def upsert_inv_agent(self, name, platform="linux", host="", ssh_user="", ssh_secret_ref="", comments="", editor=""):
+    def upsert_inv_agent(self, name, platform="linux", host="", ssh_user="", ssh_secret_ref="",
+                         ssh_port=22, comments="", editor=""):
         with self._lock:
-            self._inv_agent_cur(self.con.cursor(), name, platform, host, ssh_user, ssh_secret_ref, comments, editor)
+            self._inv_agent_cur(self.con.cursor(), name, platform, host, ssh_user, ssh_secret_ref,
+                                ssh_port, comments, editor)
             self.con.commit()
 
     def delete_inv_agent(self, name):

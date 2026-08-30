@@ -445,7 +445,8 @@ def _seed_inventory(repo) -> None:
         for an, a in (bench.get("agents") or {}).items():
             ssh = a.get("ssh") or {}
             repo.upsert_inv_agent(an, a.get("platform", "linux"), a.get("host", ""),
-                                  ssh.get("user", ""), ssh.get("password_ref", ""))
+                                  ssh.get("user", ""), ssh.get("password_ref", ""),
+                                  ssh_port=ssh.get("port") or 22)
         for b in (bench.get("boards") or []):
             creds = [{"role": r, "user": (c or {}).get("user", ""), "ref": (c or {}).get("password_ref", "")}
                      for r, c in (b.get("creds") or {}).items()]
@@ -1049,6 +1050,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             raise HTTPException(400, "need name")
         repo.upsert_inv_agent(body["name"], body.get("platform", "linux"), body.get("host", ""),
                               body.get("ssh_user", ""), body.get("ssh_secret_ref", ""),
+                              ssh_port=int(body.get("ssh_port") or 22),
                               comments=body.get("comments", ""), editor=me["username"])
         return {"ok": True}
 
@@ -1118,7 +1120,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         from atf.access.agent import AgentConn
         from atf.core.inventory import Agent
         ag = Agent(name=node["name"], platform=node.get("platform", "linux"), host=node.get("host", ""),
-                   ssh_user=node.get("ssh_user", ""), ssh_password=pw)
+                   ssh_user=node.get("ssh_user", ""), ssh_password=pw, ssh_port=int(node.get("ssh_port") or 22))
         conn = AgentConn(ag)
         try:
             r = conn.run(command, timeout=20)

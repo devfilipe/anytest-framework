@@ -971,7 +971,7 @@ async function renderInventory(m){
   const [agents,boards,drivers,actions]=await Promise.all([j("/api/inventory/agents"),j("/api/inventory/boards"),j("/api/inventory/drivers"),j("/api/inventory/actions")]);
   let h='<div class="panel"><div class="sec-title">Inventory · Nodes '+hlp("Shared, reusable bench nodes (e.g. a console-server node, a craft node, a power-control node). Benches import these by name and wire which node serves a board's console/craft. NOT the dev/tester Agent (ADMIN › Agents). Public — any user edits.")+'</div><button class="act" onclick="editInvNode(null)">+ New node</button>';
   h+='<table style="margin-top:12px"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Secret ref</th><th>Test</th><th>Benches</th><th>Comments</th><th>Edited by</th><th></th></tr>';
-  agents.forEach(a=>h+=`<tr><td class="req">${esc(a.name)}</td><td class="muted">${esc(a.platform)}</td><td class="muted">${esc(a.host||"—")}</td><td class="muted">${esc(a.ssh_user||"—")}</td><td class="muted">${esc(a.ssh_secret_ref||"—")}</td><td>${invPingCell("pn-"+cssid(a.name),a.host)}</td><td>${invBenches(a)}</td><td class="muted">${invComment(a)}</td><td class="muted">${invEditor(a)}</td><td><a onclick="editInvNode('${esc(a.name)}')">edit</a> · <a onclick="delInvAgent('${esc(a.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
+  agents.forEach(a=>h+=`<tr><td class="req">${esc(a.name)}</td><td class="muted">${esc(a.platform)}</td><td class="muted">${a.host?esc(a.host)+(a.ssh_port&&a.ssh_port!=22?":"+esc(a.ssh_port):""):"—"}</td><td class="muted">${esc(a.ssh_user||"—")}</td><td class="muted">${esc(a.ssh_secret_ref||"—")}</td><td>${invPingCell("pn-"+cssid(a.name),a.host)}</td><td>${invBenches(a)}</td><td class="muted">${invComment(a)}</td><td class="muted">${invEditor(a)}</td><td><a onclick="editInvNode('${esc(a.name)}')">edit</a> · <a onclick="delInvAgent('${esc(a.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
   h+=(agents.length?'':'<tr><td colspan="9" class="muted">no nodes</td></tr>')+'</table></div>';
   h+='<div class="panel"><div class="sec-title">Inventory · Boards '+hlp("Shared boards — just name, model and serial. The connection info (drivers, creds) is bench wiring, set in the bench editor.")+'</div><button class="act" onclick="editInvBoard(null)">+ New board</button>';
   h+='<table style="margin-top:12px"><tr><th>Name</th><th>Model</th><th>Serial</th><th>Benches</th><th>Comments</th><th>Edited by</th><th></th></tr>';
@@ -1012,7 +1012,8 @@ async function editInvNode(name){
   let h=`<h2>${name?"Node · "+esc(name):"New node"}</h2>`;
   h+=`<div class="grid2"><div class="field"><label>Name</label><input class="f" id="in-name" value="${esc(a.name||"")}" ${name?"readonly":""} placeholder="node1"></div>`
     +`<div class="field"><label>Platform</label><select class="f" id="in-plat">${platOpts}</select></div></div>`;
-  h+=`<div class="grid2"><div class="field"><label>Host</label><input class="f" id="in-host" value="${esc(a.host||"")}" placeholder="192.0.2.201"></div>`
+  h+=`<div class="grid3"><div class="field"><label>Host</label><input class="f" id="in-host" value="${esc(a.host||"")}" placeholder="192.0.2.201"></div>`
+    +`<div class="field"><label>SSH port ${hlp("Defaults to 22. Set another when the node's sshd listens elsewhere — e.g. a reverse tunnel exposing a dev machine.")}</label><input class="f" id="in-port" type="number" min="1" value="${esc(a.ssh_port||22)}" placeholder="22"></div>`
     +`<div class="field"><label>SSH user</label><input class="f" id="in-user" value="${esc(a.ssh_user||"")}" placeholder="user"></div></div>`;
   h+=`<div class="field"><label>Secret ref ${hlp("Points to the vault; set the value under Admin › Secrets. Empty = key-based SSH.")}</label><input class="f" id="in-ref" value="${esc(a.ssh_secret_ref||"")}" placeholder="node1"></div>`;
   h+=`<div class="field"><label>Comments ${hlp("Free-form notes about this node for other users. The last editor is recorded.")}</label><textarea class="f" id="in-comments" rows="2" placeholder="e.g. bench-side node bridging the console">${esc(a.comments||"")}</textarea></div>`;
@@ -1021,7 +1022,7 @@ async function editInvNode(name){
 }
 async function saveInvNode(orig){
   const name=(orig||$("#in-name").value||"").trim(); if(!name){$("#in-msg").textContent="need name";return;}
-  const body={name,platform:$("#in-plat").value,host:$("#in-host").value,ssh_user:$("#in-user").value,ssh_secret_ref:$("#in-ref").value,comments:$("#in-comments").value};
+  const body={name,platform:$("#in-plat").value,host:$("#in-host").value,ssh_user:$("#in-user").value,ssh_secret_ref:$("#in-ref").value,ssh_port:parseInt($("#in-port").value)||22,comments:$("#in-comments").value};
   const r=await adminFetch("/api/inventory/agents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ closeModal(); render("st-inventory"); } else $("#in-msg").textContent="error"; }
 async function delInvAgent(n){ if(!confirm("Delete node "+n+"?"))return; await adminFetch("/api/inventory/agents/"+encodeURIComponent(n),{method:"DELETE"}); render("st-inventory"); }
@@ -1094,7 +1095,7 @@ async function viewSuite(name){ const txt=await t("/api/suites/"+encodeURICompon
 let CFG=null, CFGNAME=null;
 function apiToCfg(d){ return {
   _name:"", _models:MODELS,
-  agents:Object.entries(d.agents||{}).map(([name,a])=>({name,platform:a.platform||"linux",host:a.host||"",user:(a.ssh||{}).user||"",ref:(a.ssh||{}).password_ref||""})),
+  agents:Object.entries(d.agents||{}).map(([name,a])=>({name,platform:a.platform||"linux",host:a.host||"",user:(a.ssh||{}).user||"",ref:(a.ssh||{}).password_ref||"",port:(a.ssh||{}).port||22})),
   boards:(d.boards||[]).map(b=>({name:b.name||"",model:b.model||"",serial:b.serial||"",
     creds:Object.entries(b.creds||{}).map(([role,c])=>({role,user:c.user||"",ref:c.password_ref||""})),
     drivers:Object.entries(b.drivers||{}).map(([alias,c])=>{ const vals={};
@@ -1104,7 +1105,7 @@ function apiToCfg(d){ return {
     actions:Object.entries(b.actions||{}).map(([an,a])=>({name:an,action_name:a.action_name||an,agent:a.agent||"",signals:Object.entries(a.signals||{}).map(([k,v])=>({k,v}))}))}))
 };}
 function cfgToApi(){
-  const agents={}; CFG.agents.forEach(a=>{ if(a.name) agents[a.name]={platform:a.platform,host:a.host,ssh:{user:a.user,password_ref:a.ref}};});
+  const agents={}; CFG.agents.forEach(a=>{ if(a.name) agents[a.name]={platform:a.platform,host:a.host,ssh:{user:a.user,password_ref:a.ref,port:parseInt(a.port)||22}};});
   const boards=CFG.boards.map(b=>{ const o={name:b.name,model:b.model,serial:b.serial,creds:{},drivers:{}};
     b.creds.forEach(c=>{ if(c.role) o.creds[c.role]={user:c.user,password_ref:c.ref};});
     (b.drivers||[]).forEach(d=>{ if(!d.alias)return;
@@ -1131,7 +1132,7 @@ function invImportSelect(items,existing,fn){
 }
 function importInvAgent(name){ if(!name||CFG.agents.some(a=>a.name===name))return;
   const a=(INV_AGENTS||[]).find(x=>x.name===name); if(!a)return;
-  CFG.agents.push({name:a.name,platform:a.platform,host:a.host,user:a.ssh_user,ref:a.ssh_secret_ref}); reRenderBench(); }
+  CFG.agents.push({name:a.name,platform:a.platform,host:a.host,user:a.ssh_user,ref:a.ssh_secret_ref,port:a.ssh_port||22}); reRenderBench(); }
 function importInvBoard(name){ if(!name||CFG.boards.some(b=>b.name===name))return;
   const b=(INV_BOARDS||[]).find(x=>x.name===name); if(!b)return;
   CFG.boards.push({name:b.name,model:b.model,serial:b.serial,creds:[{role:"root",user:"root",ref:"root"}],drivers:[],actions:[]}); reRenderBench(); }
@@ -1144,6 +1145,7 @@ function agentRow(i){ const a=CFG.agents[i];
   return `<tr><td><input class="f" value="${esc(a.name)}" oninput="CFG.agents[${i}].name=this.value" placeholder="node1"></td>`
    +`<td style="width:110px"><select class="f" onchange="CFG.agents[${i}].platform=this.value"><option${a.platform==='linux'?' selected':''}>linux</option><option${a.platform==='windows'?' selected':''}>windows</option></select></td>`
    +`<td><input class="f" value="${esc(a.host)}" oninput="CFG.agents[${i}].host=this.value" placeholder="192.0.2.201"></td>`
+   +`<td style="width:74px"><input class="f" type="number" min="1" value="${esc(a.port||22)}" oninput="CFG.agents[${i}].port=parseInt(this.value)||22" placeholder="22"></td>`
    +`<td><input class="f" value="${esc(a.user)}" oninput="CFG.agents[${i}].user=this.value" placeholder="user"></td>`
    +`<td><input class="f" value="${esc(a.ref)}" oninput="CFG.agents[${i}].ref=this.value" placeholder="node1"></td>`
    +`<td style="width:34px"><button class="btn-ghost" onclick="rmAgent(${i})" title="remove">✕</button></td></tr>`; }
@@ -1237,7 +1239,7 @@ function boardCard(i){ const b=CFG.boards[i];
 function benchBody(){ const isNew=!CFGNAME;
   let h='';
   h+=`<div class="panel"><div class="field" style="max-width:340px;margin:0"><label>Bench name ${hlp("Rename allowed — saving under a new name recreates the bench (same inventory) and removes the old one.")}</label><input class="f" value="${esc(CFG._name||'')}" oninput="CFG._name=this.value" placeholder="lab-b"></div></div>`;
-  h+=`<div class="panel"><div class="sec-title">Nodes ${hlp("Bench nodes that bridge access to the board — e.g. a console-server node, a craft node, a power-control node. (Not the dev/tester Agent under ADMIN.) Import shared nodes from the Inventory or define a new one; new ones are added to the inventory on save. Which node serves a board's console/craft is wired per-board below.")}</div><table class="itable"><tr><th>Name</th><th>Platform</th><th>Host</th><th>SSH user</th><th>Password ref</th><th></th></tr>`
+  h+=`<div class="panel"><div class="sec-title">Nodes ${hlp("Bench nodes that bridge access to the board — e.g. a console-server node, a craft node, a power-control node. (Not the dev/tester Agent under ADMIN.) Import shared nodes from the Inventory or define a new one; new ones are added to the inventory on save. Which node serves a board's console/craft is wired per-board below.")}</div><table class="itable"><tr><th>Name</th><th>Platform</th><th>Host</th><th>Port</th><th>SSH user</th><th>Password ref</th><th></th></tr>`
     +CFG.agents.map((_,i)=>agentRow(i)).join('')+`</table><div class="row" style="margin-top:8px"><button class="btn-ghost" onclick="addAgent()">+ new node</button>`
     +invImportSelect(INV_AGENTS,CFG.agents.map(a=>a.name),"importInvAgent")+`</div></div>`;
   h+=`<div class="panel"><div class="sec-title">Boards ${hlp("Import shared boards from the Inventory, or define a new one. Drivers/actions (the wiring) belong to THIS bench.")}</div>`+CFG.boards.map((_,i)=>boardCard(i)).join('')
@@ -1247,7 +1249,7 @@ function benchBody(){ const isNew=!CFGNAME;
   if(!isNew) h+=`<button class="btn-danger" onclick="delBench('${esc(CFGNAME)}')">Delete</button>`;
   h+=`<span id="cfg-msg" class="muted"></span></div><p class="muted" style="margin:8px 0 0">Secret values are managed under <strong>Admin › Secrets</strong> (referenced here by name).</p></div>`;
   return h; }
-function addAgent(){ CFG.agents.push({name:"",platform:"linux",host:"",user:"",ref:""}); reRenderBench(); }
+function addAgent(){ CFG.agents.push({name:"",platform:"linux",host:"",port:22,user:"",ref:""}); reRenderBench(); }
 function rmAgent(i){ CFG.agents.splice(i,1); reRenderBench(); }
 function addBoard(){ CFG.boards.push({name:"",model:(MODELS[0]?.name||""),serial:"",creds:[{role:"root",user:"root",ref:"root"}],drivers:[],actions:[]}); reRenderBench(); }
 function rmBoard(i){ CFG.boards.splice(i,1); reRenderBench(); }

@@ -50,7 +50,8 @@ class AgentConn:
             key = getattr(self.agent, "ssh_key", "") or None
             # password when one is configured; otherwise fall back to key auth (a configured key
             # file, the ssh-agent, or the user's default ~/.ssh keys) so passwordless hosts work
-            c.connect(self.agent.host, username=self.agent.ssh_user,
+            c.connect(self.agent.host, port=int(getattr(self.agent, "ssh_port", 22) or 22),
+                      username=self.agent.ssh_user,
                       password=pw, key_filename=key, timeout=15,
                       allow_agent=(pw is None), look_for_keys=(pw is None))
             self._ssh = c

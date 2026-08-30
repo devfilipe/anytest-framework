@@ -26,6 +26,7 @@ class Agent:
     host: str = ""
     ssh_user: str = ""
     ssh_password: str = ""
+    ssh_port: int = 22                  # SSH port on the node (not always 22, e.g. reverse tunnels)
     ssh_key: str = ""                   # optional private-key path; empty ⇒ password or default keys
     raw: dict = field(default_factory=dict)
 
@@ -74,6 +75,7 @@ def parse(data: dict, secrets: dict) -> Bench:
         agents[name] = Agent(
             name=name, platform=a.get("platform", "linux"), host=a.get("host", ""),
             ssh_user=ssh.get("user", ""), ssh_password=_resolve_pw(ssh, secrets),
+            ssh_port=int(ssh.get("port") or 22),
             ssh_key=os.path.expanduser(ssh.get("key", "") or ""), raw=a)
 
     boards = []
