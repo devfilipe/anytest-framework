@@ -8,6 +8,7 @@ developer's *uncommitted* code executes against the real bench without a git rou
 from __future__ import annotations
 
 import io
+import os
 import queue
 import secrets
 import tarfile
@@ -19,6 +20,17 @@ from pathlib import Path
 
 def _now() -> float:
     return time.time()
+
+
+def work_root() -> str | None:
+    """Base dir for the app's scratch dirs (uploaded trees, run outputs). Defaults to the system
+    temp dir (fine for dev/local). In a hardened deployment `PrivateTmp=true` hides /tmp from the
+    docker daemon, so mgmt `--mgmt-backend docker` mounts resolve to nothing; set $ATF_WORK to a
+    host-visible, service-writable path (e.g. /var/lib/atf/work) so those bind mounts work."""
+    w = os.environ.get("ATF_WORK") or None
+    if w:
+        os.makedirs(w, exist_ok=True)
+    return w
 
 
 class AgentSession:
@@ -98,7 +110,7 @@ class AgentHub:
         return tok, ev
 
     def receive_tree(self, s: AgentSession, tok: str, raw: bytes) -> Path:
-        d = Path(tempfile.mkdtemp(prefix="atf-agent-tree-"))
+        d = Path(tempfile.mkdtemp(prefix="atf-agent-tree-", dir=work_root()))
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
             tf.extractall(d, filter="data")       # dev content, admin-gated; data filter blocks traversal
         up = s.uploads.get(tok)

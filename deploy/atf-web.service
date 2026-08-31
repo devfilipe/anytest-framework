@@ -10,6 +10,9 @@ User=atf
 Group=atf
 WorkingDirectory=/opt/anytest-framework
 EnvironmentFile=/etc/atf/atf.env
+# Scratch dir for uploaded agent trees + run outputs. Must be a host-visible path (NOT /tmp) so the
+# mgmt --mgmt-backend docker bind mounts are visible to the docker daemon despite PrivateTmp below.
+Environment=ATF_WORK=/var/lib/atf/work
 ExecStart=/opt/anytest-framework/.venv/bin/atf web --host 0.0.0.0 --port 8899 --out /var/lib/atf/reports
 Restart=on-failure
 RestartSec=3

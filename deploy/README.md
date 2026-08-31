@@ -12,10 +12,14 @@ Tested on Ubuntu; adjust `python3-venv` install for your distro.
 ```bash
 sudo git clone https://github.com/devfilipe/anytest-framework /opt/anytest-framework
 cd /opt/anytest-framework
-sudo apt-get install -y python3-venv          # Debian/Ubuntu; venv needs it to bootstrap pip
+sudo apt-get install -y python3-venv nmap      # Debian/Ubuntu; venv bootstraps pip, nmap = mgmt scans
 sudo python3 -m venv .venv
 sudo .venv/bin/pip install -e ".[host,web]"
 ```
+
+**`nmap` is a runtime dependency** of the MGMT checks (port scans, `ssl-enum-ciphers` NSE). Without
+it the `local` mgmt backend fails at dispatch (`driver dispatch failed`). See *MGMT check backends*
+below for the `docker` alternative.
 
 ## 2. Dedicated user + writable data dir
 
@@ -55,11 +59,35 @@ Log in as `admin` / `admin` and **change the password immediately** (Admin › U
 **config-driven** — no `ATF_CHECK_SOURCES`; add check-source repos under Admin › Repositories, or
 connect an agent.
 
+## 5. MGMT check backends (port scans / TLS audits)
+
+A test plan runs its MGMT checks (an `ip` driver with no agent) through one of two backends:
+
+- **`local`** — runs `nmap` directly on this host. Just needs the `nmap` package (installed in step 1).
+  Simplest, lowest-privilege — recommended. The container adds no network advantage (it runs with
+  `--network host`); it only packages the toolchain.
+- **`docker`** — runs the checks in the `atf-mgmt` toolbox image. Build it and grant the service user
+  access to the docker socket:
+
+  ```bash
+  cd /opt/anytest-framework
+  sudo docker build -f docker/atf-mgmt.Dockerfile -t atf-mgmt:latest .   # or: make image
+  sudo usermod -aG docker atf          # ⚠ docker-group ≈ root — weigh the trade-off
+  sudo systemctl restart atf-web
+  ```
+
+  The unit sets `ATF_WORK=/var/lib/atf/work` on purpose: with `PrivateTmp=true` the service's `/tmp`
+  is invisible to the docker daemon, so uploaded-agent trees and run outputs (which the `docker`
+  backend bind-mounts) **must** live on a host-visible path. Keep `ATF_WORK` whenever the docker
+  backend is used.
+
+Pick the backend per test plan (its *MGMT backend* field) or per ad-hoc run.
+
 ## Update flow
 
 ```bash
 cd /opt/anytest-framework && sudo git pull
 sudo .venv/bin/pip install -e ".[host,web]"   # only if dependencies changed
+sudo docker build -f docker/atf-mgmt.Dockerfile -t atf-mgmt:latest .   # only if using the docker backend
 sudo systemctl restart atf-web
-# also `make image` if you dispatch mgmt checks with --mgmt-backend docker
 ```

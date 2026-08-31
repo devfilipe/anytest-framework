@@ -551,7 +551,8 @@ def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend
     tree = s.uploads[tok]["dir"]
     dev_dirs = [str(p) for p in sorted(Path(tree).iterdir()) if p.is_dir()]   # dev trees win
     srcs = dev_dirs + [str(p) for p in source_paths()]
-    out = Path(tempfile.mkdtemp(prefix="atf-agent-run-"))
+    from atf.web.agents import work_root
+    out = Path(tempfile.mkdtemp(prefix="atf-agent-run-", dir=work_root()))
     req = {"bench": bench_stem, "board": board, "out": str(out),
            "select": select, "mgmt_backend": mgmt_backend}
     env = {**os.environ, "ATF_CHECK_SOURCES": os.pathsep.join(srcs)}
