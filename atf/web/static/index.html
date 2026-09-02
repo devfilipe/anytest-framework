@@ -508,10 +508,11 @@ async function renderActivity(m){
     else rn='<span class="badge ok">idle</span> <span class="muted">no test running</span>';
     const users=(d.users||[]).map(u=>`<tr><td class="req">${esc(u.username)}${u.username===ADMIN_USER?' <span class="muted">(you)</span>':''}</td><td>${u.is_admin?'<span class="pill origin-ag">admin</span>':'<span class="pill">user</span>'}</td><td class="muted">${u.sessions}</td><td class="muted">${_dur(u.since_s)}</td></tr>`).join("")||'<tr><td colspan="4" class="muted">no active sessions</td></tr>';
     const ags=(d.agents||[]).map(a=>{const ai=a.ai||{}, srcs=(a.sources||[]).map(s=>esc(s.name)).join(", ")||'—';
-      return `<tr><td class="req">${esc(a.name)}</td><td>${esc(a.owner||"?")}</td><td class="muted">${esc(a.platform||"")}</td><td>${ai.on?`<span class="badge ok">AI${ai.model?" · "+esc(ai.model):""}</span>`:'<span class="muted">—</span>'}</td><td class="muted">${esc(""+(a.idle!=null?a.idle:"?"))}s</td><td class="muted">${srcs}</td></tr>`;}).join("")||'<tr><td colspan="6" class="muted">no agents connected</td></tr>';
+      const can=ADMIN_IS||a.owner===ADMIN_USER;   // admin (any) or the owner may disconnect it
+      return `<tr><td class="req">${esc(a.name)}</td><td>${esc(a.owner||"?")}</td><td class="muted">${esc(a.platform||"")}</td><td>${ai.on?`<span class="badge ok">AI${ai.model?" · "+esc(ai.model):""}</span>`:'<span class="muted">—</span>'}</td><td class="muted">${esc(""+(a.idle!=null?a.idle:"?"))}s</td><td class="muted">${srcs}</td><td>${can?`<button class="btn-danger" style="padding:3px 10px" onclick="disconnectAgent('${esc(a.id)}','${esc(a.name)}')">Disconnect</button>`:'<span class="muted">—</span>'}</td></tr>`;}).join("")||'<tr><td colspan="7" class="muted">no agents connected</td></tr>';
     host.innerHTML=`<div class="panel"><div class="sec-title" style="margin-top:0">Running now</div><div>${rn}</div></div>`
       +`<div class="panel"><div class="sec-title">Signed-in users <span class="muted" style="font-weight:400">(${(d.users||[]).length})</span></div><table><tr><th>User</th><th>Role</th><th>Sessions</th><th>Signed in</th></tr>${users}</table></div>`
-      +`<div class="panel"><div class="sec-title">Connected agents <span class="muted" style="font-weight:400">(${(d.agents||[]).length})</span></div><div style="overflow-x:auto"><table><tr><th>Name</th><th>Owner</th><th>Platform</th><th>AI</th><th>Idle</th><th>Repos</th></tr>${ags}</table></div></div>`;
+      +`<div class="panel"><div class="sec-title">Connected agents <span class="muted" style="font-weight:400">(${(d.agents||[]).length})</span></div><div style="overflow-x:auto"><table><tr><th>Name</th><th>Owner</th><th>Platform</th><th>AI</th><th>Idle</th><th>Repos</th><th></th></tr>${ags}</table></div></div>`;
   };
   m.innerHTML=`<div class="panel" style="margin-bottom:0"><div class="row" style="justify-content:space-between;margin:0"><div class="sec-title" style="margin:0">📡 Activity ${hlp("Live overview — signed-in users, connected agents, and whether a test is running. Auto-refreshes.")}</div><span class="muted" style="font-size:11px">auto-refresh · every 4s</span></div></div><div id="act-body"></div>`;
   await draw();
@@ -724,7 +725,7 @@ async function syncAgent(aid,name){
 async function disconnectAgent(aid,name){
   if(!confirm("Disconnect agent "+name+"?\nEverything it provided (tests + requirement catalogs) will be cleared from the platform."))return;
   await adminFetch("/api/agents/"+encodeURIComponent(aid),{method:"DELETE"});
-  render("ad-agents");
+  render(document.querySelector("#nav button.on")?.dataset.t||"ad-agents");   // refresh the current view (Agents or Activity)
 }
 
 // ---------------- Requirements (DB-backed catalog; view + import/export) ----------------
@@ -2360,7 +2361,7 @@ function applyNavRole(){
   const rootAdmin = ADMIN_USER==="admin";
   document.querySelectorAll("#nav button").forEach(b=>{
     const t=b.dataset.t;
-    const show = ADMIN_TABS.includes(t) ? ADMIN_IS : (rootAdmin ? (t==="ad-agents"||t==="activity") : true);
+    const show = ADMIN_TABS.includes(t) ? ADMIN_IS : (rootAdmin ? (t==="activity") : true);
     b.style.display = show ? "" : "none";
   });
   document.querySelectorAll("#nav .nav-group").forEach(g=>{        // hide a label whose items are all hidden
