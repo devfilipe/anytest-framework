@@ -132,6 +132,31 @@ def _t_map(a):
     return json.dumps({"saved": _loads(put), "validation": _loads(validation)}, ensure_ascii=False)
 
 
+def _t_testplan(a):
+    """List/get/save/run a Test Plan — a named Suite + bench/board. `op`: list | get | save | run.
+    'run' resolves the plan and starts it (fetch the report with atf_report)."""
+    op = (a.get("op") or "list").lower()
+    name = urllib.parse.quote(a.get("name", ""))
+    if op == "list":
+        return _api("GET", "/api/test-plans")
+    if op == "get":
+        return _api("GET", "/api/test-plans/" + name)
+    if op == "save":
+        return _api("PUT", "/api/test-plans/" + name, {
+            "suite": a.get("suite", ""), "bench": a.get("bench", ""),
+            "board": a.get("board", ""), "mgmt_backend": a.get("mgmt_backend", "docker")})
+    if op == "run":
+        plan = _loads(_api("GET", "/api/test-plans/" + name))
+        if not isinstance(plan, dict) or plan.get("error"):
+            return json.dumps({"error": "plan not found", "detail": plan})
+        board = plan.get("board")
+        return _api("POST", "/api/run", {
+            "suite": plan.get("suite"), "bench": plan.get("bench"),
+            "board": [board] if isinstance(board, str) else (board or []),
+            "mgmt_backend": plan.get("mgmt_backend", "docker")})
+    return json.dumps({"error": "unknown op", "op": op})
+
+
 def _loads(s):
     try:
         return json.loads(s)
@@ -175,6 +200,11 @@ TOOLS = [
               "id": {"type": "string"}, "tests": {"type": "array", "items": {"type": "string"}},
               "fallback": {"type": "string", "enum": ["TEST_PASS", "TEST_FAIL"]}}, "required": ["id"]}}},
           "required": ["name", "requirements"]}}, _t_map),
+    ({"name": "atf_testplan", "description": "List/get/save/run a Test Plan (a named Suite + bench/board). op: list | get | save | run. 'run' resolves the plan and starts it — fetch results with atf_report.",
+      "inputSchema": {"type": "object", "properties": {
+          "op": {"type": "string", "enum": ["list", "get", "save", "run"], "default": "list"},
+          "name": {"type": "string"}, "suite": {"type": "string"}, "bench": {"type": "string"},
+          "board": {"type": "string"}, "mgmt_backend": {"type": "string", "enum": ["local", "docker"]}}}}, _t_testplan),
     ({"name": "atf_api", "description": "Call ANY atf REST API endpoint — the general-purpose tool for anything the curated tools don't cover (inventory, benches, requirements, test-plans, board-models, reports list, suites CRUD/validate/export, …). Permissions are enforced by your session token: admin-only endpoints are denied. Examples: GET /api/inventory/boards, GET /api/benches, GET /api/requirements, GET /api/test-plans, GET /api/reports, PUT /api/suites/{name}. Prefer the specific tools (atf_catalog/atf_run/atf_report/…) for common flows.",
       "inputSchema": {"type": "object", "properties": {
           "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},

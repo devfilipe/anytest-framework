@@ -109,14 +109,22 @@ directly**).
 - `atf_scaffold` — scaffold a test on the agent's repo (`kind: auto|manual`, drivers/actions).
 - `atf_map` — save a suite's requirement→test map (ordered) and validate it.
 - `atf_benches` — list benches (or a bench's boards) to pick where to run.
+- `atf_testplan` — list/get/save/run a Test Plan (a named Suite + bench/board).
 - `atf_run` — run a suite or ad-hoc ids against a bench/board.
 - `atf_report` — fetch a run's report (verdicts, drivers/actions, skip reasons, roll-up).
 - `atf_evidence` — fetch the raw evidence text a check wrote (what the probe saw) — for triage/debug.
 - `atf_api` — any REST endpoint the curated tools don't cover.
 
 The skills next to this file drive the common flows: **atf-author-driver-test** / **atf-author-manual-test**
-(create), **atf-debug-check** (implement → run local → read evidence → iterate), **atf-map-suite**
-(map requirements↔tests), **atf-run** (run + read), **atf-triage-report** (interpret a report).
+(create a test), **atf-author-requirement** (author a requirement catalog), **atf-debug-check**
+(implement → run local → read evidence → iterate), **atf-map-suite** (map requirements↔tests),
+**atf-run** (run + read), **atf-triage-report** (interpret a report). For a deeper read of a run you
+can delegate to the **atf-triage** subagent (give it the `run_id`).
+
+**Guardrails** (hooks, `.claude/settings.json`): a PreToolUse hook limits writes to your check-source
+repos (`ATF_SOURCES` — both `atf_checks/` and `requirements/`), the AI pack, or a temp dir; a
+PostToolUse hook byte-compiles a new `.py` under `atf_checks/` and flags syntax errors so you fix
+them before they break discovery.
 
 Authoring/editing files is done directly in the repos under `ATF_SOURCES` (Claude Code edits them).
 Never hardcode credentials; the MCP server reads them from `.atf-ai.env` / the environment. If the

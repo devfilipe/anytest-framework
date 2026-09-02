@@ -95,3 +95,10 @@ def test_mcp_tools_present_and_wired(monkeypatch):
     assert sel["model"] == "tmd400g"
     assert sel["requirements"][0] == {"id": "vivo:C.4", "fallback": "TEST_FAIL", "tests": [{"id": "ping-dcn"}]}
     assert any(c[0] == "POST" and c[1] == "/api/suites/validate" for c in calls)
+
+    assert "atf_testplan" in names
+    m._BY_NAME["atf_testplan"][1]({"op": "list"})
+    assert calls[-1] == ("GET", "/api/test-plans", None)
+    m._BY_NAME["atf_testplan"][1]({"op": "save", "name": "tp1", "suite": "s", "bench": "b", "board": "b1"})
+    save = [c for c in calls if c[0] == "PUT" and c[1] == "/api/test-plans/tp1"][-1]
+    assert save[2]["suite"] == "s" and save[2]["board"] == "b1"

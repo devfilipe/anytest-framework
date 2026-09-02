@@ -11,10 +11,29 @@
       "mcp__atf__atf_benches",
       "mcp__atf__atf_requirements",
       "mcp__atf__atf_map",
+      "mcp__atf__atf_testplan",
       "mcp__atf__atf_api",
       "Read",
       "Edit",
       "Write"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/write-guard.py\"" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/py-compile.py\"" }
+        ]
+      }
     ]
   }
 }
