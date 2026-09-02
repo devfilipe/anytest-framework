@@ -481,14 +481,18 @@ python3 atf-agent.py --server ${esc(origin)} --token ${esc(tok)} \\
   h+='<table style="margin-top:6px"><tr><th>Name</th><th>Owner</th><th>Platform</th><th>Sources · sha1 · delta</th><th>Idle</th><th></th></tr>';
   agents.forEach(a=>{
     const srcs=(a.sources||[]).map(s=>`<span class="pill">${esc(s.name)} <span class="muted">${esc(s.head||"?")}</span>${s.dirty?' <span class="badge danger">delta</span>':''}</span>`).join(" ")||'<span class="muted">—</span>';
-    const mine=ADMIN_IS||a.owner===ADMIN_USER;
+    // Operating an agent (Browse/Sync/AI) is OWNER-ONLY — not even an admin may drive another
+    // user's agent or its AI. Admins may additionally Disconnect anyone's agent (teardown only).
+    const mine=a.owner===ADMIN_USER;
     const aiOn=a.ai&&a.ai.on;
     const acts=mine
       ? `<button class="act" onclick="browseAgent('${esc(a.id)}','${esc(a.name)}')">Browse</button> <button class="btn-ghost" onclick="syncAgent('${esc(a.id)}','${esc(a.name)}')">Sync</button> `
         +`<button class="btn-ghost" onclick="toggleAgentAI('${esc(a.id)}','${esc(a.name)}',${aiOn?'true':'false'})" title="${aiOn?'Disconnect AI (the installed pack stays on disk)':'Install the atf resource pack + connect Claude in your env — then chat in Studio › Wizard'}">${aiOn?'🤖 Disconnect AI':'Connect AI'}</button> `
         +(aiOn&&!a.ai.claude?`<span class="badge warn" title="Install Claude Code on the agent machine to use the Wizard">no claude CLI</span> `:'')
         +`<button class="btn-danger" onclick="disconnectAgent('${esc(a.id)}','${esc(a.name)}')">Disconnect</button>`
-      : '<span class="muted">—</span>';
+      : (ADMIN_IS
+          ? `<span class="muted" title="Only the owner can browse/sync/AI another user's agent">—</span> <button class="btn-danger" onclick="disconnectAgent('${esc(a.id)}','${esc(a.name)}')" title="Admin: disconnect this agent (teardown only)">Disconnect</button>`
+          : '<span class="muted">—</span>');
     const stale=!a.proto?' <span class="badge warn" title="Older agent build (predates version reporting). If a feature like Connect AI fails, restart the agent so it re-downloads: curl <server>/agent.py">older build</span>':'';
     h+=`<tr><td class="req">${esc(a.name)}${stale}</td><td>${esc(a.owner||"?")}${a.owner===ADMIN_USER?' <span class="muted">(you)</span>':''}</td><td class="muted">${esc(a.platform)}</td><td>${srcs}</td><td class="muted">${esc(a.idle)}s</td><td>${acts}</td></tr>`;
   });
@@ -500,7 +504,7 @@ async function rotateAgentToken(){ if(!confirm("Rotate the agent token? Connecte
 let WIZ={aid:"",name:"",session:"",msgs:[],busy:false,unrestricted:true,model:""};
 async function renderWizardTab(m){
   const agents=await adminFetch("/api/agents").then(r=>r.json()).catch(()=>[]);
-  const mine=(agents||[]).filter(a=>(ADMIN_IS||a.owner===ADMIN_USER)&&a.ai&&a.ai.on&&a.ai.claude);
+  const mine=(agents||[]).filter(a=>a.owner===ADMIN_USER&&a.ai&&a.ai.on&&a.ai.claude);   // own agents only
   if(WIZ.aid && mine.some(a=>a.id===WIZ.aid)) return renderWizardChat(m);   // continue an open conversation
   if(!mine.length){
     m.innerHTML=`<div class="panel"><div class="sec-title">✨ Wizard</div><p class="muted">No AI-connected agent with the <code>claude</code> CLI. Connect AI on one of your agents (Studio › Agents → <b>Connect AI</b>) to chat.</p><button class="act" onclick="render('ad-agents')">Go to Agents</button></div>`;
@@ -622,7 +626,7 @@ function diffHtml(t){
 }
 // ---- Agent: Browse (provided requirements + tests + delta, view/edit) · Sync · Disconnect ----
 async function browseAgent(aid,name){
-  if(!await ensureAdmin()) return;
+  if(!await ensureLoggedIn()) return;   // owner-only; the server enforces ownership
   const [cat,insp]=await Promise.all([
     adminFetch("/api/agents/catalog").then(r=>r.json()).catch(()=>({})),
     adminFetch("/api/agents/"+encodeURIComponent(aid)+"/inspect").then(r=>r.json()).catch(()=>({}))]);
@@ -660,7 +664,7 @@ async function browseAgent(aid,name){
   editorPage("Browse · "+name, h, "ad-agents");
 }
 async function syncAgent(aid,name){
-  if(!await ensureAdmin()) return;
+  if(!await ensureLoggedIn()) return;   // owner-only; the server enforces ownership
   const r=await adminFetch("/api/agents/"+encodeURIComponent(aid)+"/sync",{method:"POST"});
   const d=await r.json().catch(()=>({}));
   if(!r.ok){ openModal(`<h2>Sync failed</h2><p class="muted">${esc(d.detail||("HTTP "+r.status))}</p>`); return; }
@@ -668,7 +672,7 @@ async function syncAgent(aid,name){
   openModal(`<h2>Synced · ${esc(name)}</h2><p class="muted">Pulled ${d.checks} test(s) · ${d.requirements} requirement catalog(s) into the platform.</p><p style="margin-top:8px">${src||'<span class="muted">no sources</span>'}</p><div class="form-actions"><button class="act" onclick="closeModal();render('ad-agents')">OK</button></div>`);
 }
 async function disconnectAgent(aid,name){
-  if(!await ensureAdmin()) return;
+  if(!await ensureLoggedIn()) return;   // owner OR admin; the server enforces it
   if(!confirm("Disconnect agent "+name+"?\nEverything it provided (tests + requirement catalogs) will be cleared from the platform."))return;
   await adminFetch("/api/agents/"+encodeURIComponent(aid),{method:"DELETE"});
   render("ad-agents");
@@ -1673,6 +1677,21 @@ async function openReport(runId){
     +`<div class="form-actions"><button class="btn-ghost" onclick="openReportHtml('${esc(rep.run_id)}')">Open HTML</button><button class="btn-ghost" onclick="downloadReport('${esc(rep.run_id)}')">Download package (.zip)</button>`
     +`<button class="btn-ghost" onclick="dlReport('${esc(rep.run_id)}','md')">Export Markdown</button><button class="btn-ghost" onclick="dlReport('${esc(rep.run_id)}','json')">Export JSON</button>`
     +`${rep.mine?`<button class="btn-ghost" onclick="reportVisibility('${esc(rep.run_id)}','${rep.visibility==='public'?'private':'public'}')">Make ${rep.visibility==='public'?'private':'public'}</button>`:''}</div></div>`;
+  // run details — who ran it, when, agent/AI, framework + environment versions
+  const run=(rep.meta&&rep.meta.run)||{};
+  if(Object.keys(run).length){
+    const fw=run.framework||{}, env=run.environment||{}, via=run.ran_via_agent, conn=run.agents_connected||[];
+    const rows=[["Ran by",`<strong>${esc(run.by||"—")}</strong>`],["When",esc(run.at||rep.ts||"—")]];
+    if(run.mgmt_backend) rows.push(["Mgmt backend",esc(run.mgmt_backend)]);
+    if(via){ const ai=via.ai||{}; const aiTxt=ai.on?`on · ${esc(ai.model||"default model")}${ai.claude?"":' <span class="badge warn">no claude CLI</span>'}`:"off";
+      rows.push(["Ran via agent",`${esc(via.name)} <code>id:${esc(via.id)}</code> <span class="muted">owner ${esc(via.owner||"—")}</span> · AI ${aiTxt}`]); }
+    else rows.push(["Ran via agent",'<span class="muted">— (checks ran on the server)</span>']);
+    if(conn.length) rows.push(["Your agents connected",conn.map(a=>`${esc(a.name)} <code>id:${esc(a.id)}</code>${(a.ai&&a.ai.on)?' <span class="badge ok">AI</span>':''}`).join(", ")]);
+    rows.push(["Framework",`<code>${esc(fw.commit||"—")}</code>${fw.dirty?' <span class="badge danger">dirty</span>':''}${fw.ref?` <span class="muted">${esc(fw.ref)}</span>`:''}`]);
+    if(Object.keys(env).length) rows.push(["Environment",`python ${esc(env.python||"—")} · <span class="muted">${esc(env.platform||"—")}</span>${env.host?` · host ${esc(env.host)}`:''}`]);
+    h+=`<div class="panel"><div class="sec-title" style="margin-top:0">Run details ${hlp("Who ran this test plan, when, whether their agent (and AI) was connected, and the framework + environment versions in play.")}</div>`
+      +`<table>`+rows.map(([k,v])=>`<tr><th style="text-align:left;white-space:nowrap">${k}</th><td>${v}</td></tr>`).join("")+`</table></div>`;
+  }
   // element(s) under test + check-source versions as loaded
   if(benchBoards.length||sources.length){
     h+=`<div class="panel">`;

@@ -61,6 +61,18 @@ class AgentSession:
     def touch(self) -> None:
         self.last_seen = _now()
 
+    def has_pending(self) -> bool:
+        """True while the agent still owes a result for an in-flight request (tree upload, inspect,
+        catalog, file op, AI enable/run). A long job (a headless Wizard run can take minutes) blocks
+        the agent's single poll loop, so it can't heartbeat — the hub must NOT reap it meanwhile, or
+        the in-flight job is lost and the agent is forced to reconnect."""
+        for store in (self.uploads, self.inspects, self.catalogs, self.files):
+            for v in store.values():
+                ev = v.get("event")
+                if ev is not None and not ev.is_set():
+                    return True
+        return False
+
     def info(self) -> dict:
         return {"id": self.id, "name": self.name, "sources": self.sources,
                 "vantages": self.vantages, "platform": self.platform, "owner": self.owner,
@@ -68,10 +80,14 @@ class AgentSession:
 
 
 class AgentHub:
-    def __init__(self, ttl: float = 45.0):
+    def __init__(self, ttl: float = 45.0, busy_ttl: float = 600.0):
         self.sessions: dict[str, AgentSession] = {}
         self.lock = threading.Lock()
         self.ttl = ttl
+        # A session with an in-flight job blocks the agent's poll loop (no heartbeat), so grant it a
+        # much longer grace than the idle TTL before reaping — long enough to outlast a headless AI
+        # run — while still bounding a truly-dead agent that died mid-job.
+        self.busy_ttl = busy_ttl
 
     def register(self, name: str, sources: list, vantages: dict, platform: str,
                  catalog: list | None = None, req_files: list | None = None, owner: str = "",
@@ -95,11 +111,16 @@ class AgentHub:
             return self.sessions.pop(sid, None) is not None
 
     def alive(self) -> list[AgentSession]:
-        """Live agents; forget any that missed the poll TTL."""
-        cut = _now() - self.ttl
+        """Live agents; forget any that missed the poll TTL. A session running a long job (which
+        blocks its poll loop, so it can't heartbeat) is kept until the longer `busy_ttl` so an
+        in-flight run/upload isn't reaped out from under itself."""
+        now = _now()
         with self.lock:
-            for k in [k for k, s in self.sessions.items() if s.last_seen < cut]:
-                self.sessions.pop(k, None)
+            for k in list(self.sessions):
+                s = self.sessions[k]
+                grace = self.busy_ttl if s.has_pending() else self.ttl
+                if now - s.last_seen > grace:
+                    self.sessions.pop(k, None)
             return list(self.sessions.values())
 
     def request_tree(self, s: AgentSession) -> tuple[str, threading.Event]:

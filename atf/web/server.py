@@ -204,7 +204,7 @@ class RunState:
                 sel_for_agent = (raw.get("select", raw) if raw else
                                  {"req": params.get("req"), "ids": params.get("ids"),
                                   "vectors": params.get("vector")})
-                via_agent = self._pick_agent(sel_for_agent)
+                via_agent = self._pick_agent(sel_for_agent, owner=params.get("owner", ""))
                 if via_agent is None:
                     self._emit({"type": "done", "counts": {},
                                 "note": "no checks selected — the server has no checks and no connected agent provides them"})
@@ -271,15 +271,36 @@ class RunState:
                                   bench_name=bench_stem, on_record=on_record,
                                   cancel=self.cancel_event, run_id=run_id,
                                   suite_select=(raw.get("select", raw) if raw else None))
-            counts = report.write(recs, run_dir, history_root=self.out_root,
-                                  select=(raw.get("select", raw) if raw else None))
+            # load the run-meta the runner/worker just wrote, then enrich it with run provenance
+            # (who ran it, when, the framework + environment versions, the user's connected agent(s)
+            # and AI state) so the rendered report AND the stored report row both carry it.
             if not run_meta:                       # in-process path: the runner wrote it into run_dir
                 try:
                     run_meta = json.loads((run_dir / "run-meta.json").read_text())
                 except Exception:
                     run_meta = {}
-            # record the report (owned by the user who ran it) so it shows in VIEW › Reports
-            if self.repo and recs:
+            run_meta["run"] = self._run_provenance(params, via_agent)
+            if via_agent is not None:              # an uploaded working tree isn't a git repo on the
+                _by_src = {s.get("name"): s for s in (via_agent.sources or [])}   # server, so server-side
+                for sd in (run_meta.get("sources") or []):                        # git can't read its sha —
+                    if not sd.get("commit"):                                      # use what the agent reported
+                        a = _by_src.get(sd.get("name"))
+                        if a:
+                            sd["commit"] = (a.get("head") or "")[:12]
+                            sd["ref"] = sd.get("ref") or a.get("branch") or ""
+                            sd["dirty"] = bool(a.get("dirty"))
+                            sd["origin"] = f"agent:{via_agent.name}"
+            try:
+                (run_dir / "run-meta.json").write_text(json.dumps(run_meta, ensure_ascii=False))
+            except Exception:
+                pass
+            counts = report.write(recs, run_dir, history_root=self.out_root,
+                                  select=(raw.get("select", raw) if raw else None))
+            # record the report (owned by the user who ran it) so it shows in VIEW › Reports — even
+            # when it ran zero checks, so the run is still visible and the operator can see WHY
+            # nothing ran (the report/matrix shows the suite's requirements as not-run) instead of a
+            # silent, report-less "done {}".
+            if self.repo:
                 try:
                     self.repo.add_report(run_id=run_id, owner=params.get("owner", ""),
                                          suite=params.get("suite") or "ad-hoc", bench=bench_stem,
@@ -288,7 +309,17 @@ class RunState:
                                          meta=run_meta)                                     # bench + versions
                 except Exception:
                     pass
-            self._emit({"type": "done", "counts": counts, "run_id": run_id})
+            done = {"type": "done", "counts": counts, "run_id": run_id}
+            if not recs:                           # zero checks ran — say why, don't leave a bare "done {}"
+                tgt = [b for b in bench.boards if not boards or b.name in boards]
+                where = f"agent {via_agent.name}'s sources" if via_agent else "the server's check-sources"
+                if tgt:
+                    done["note"] = (f"0 checks ran — none of the suite's tests are provided for board "
+                                    f"'{tgt[0].name}' (model '{tgt[0].model}') by {where}. Check the test "
+                                    "id/model and that the check-source is loaded/synced.")
+                else:
+                    done["note"] = "0 checks ran — the selected board isn't on this bench."
+            self._emit(done)
         except Exception as e:
             self._emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:
@@ -300,11 +331,51 @@ class RunState:
             self.active = False
             self.lock.release()
 
-    def _pick_agent(self, sel):
+    def _run_provenance(self, params: dict, via_agent) -> dict:
+        """Who/what/when produced this run — recorded into the report so a reader sees the user who
+        ran it, the exact date/time, whether that user had an agent connected (and its id) with AI
+        enabled, and the framework + environment versions in play."""
+        import platform as _pf
+        from datetime import datetime as _dt
+
+        owner = params.get("owner", "")
+
+        def _ag(a):
+            ai = getattr(a, "ai", None) or {}
+            return {"id": a.id, "name": a.name, "owner": a.owner, "proto": getattr(a, "proto", 0),
+                    "ai": {"on": bool(ai.get("on")), "model": ai.get("model") or "",
+                           "claude": ai.get("claude")},
+                    "sources": [{"name": s.get("name"), "head": s.get("head"),
+                                 "branch": s.get("branch"), "dirty": bool(s.get("dirty"))}
+                                for s in (getattr(a, "sources", None) or [])]}
+
+        hub = getattr(self, "hub", None)
+        mine = [a for a in (hub.alive() if hub else []) if getattr(a, "owner", "") == owner] if owner else []
+        try:
+            fw = _framework_version()
+        except Exception:
+            fw = {}
+        return {
+            "by": owner,
+            "at": _dt.now().isoformat(timespec="seconds"),
+            "mgmt_backend": params.get("mgmt_backend", ""),
+            "framework": fw,
+            "environment": {"python": _pf.python_version(), "platform": _pf.platform(),
+                            "host": _pf.node()},
+            "agents_connected": [_ag(a) for a in mine],
+            "ai_connected": any((getattr(a, "ai", None) or {}).get("on") for a in mine),
+            "ran_via_agent": _ag(via_agent) if via_agent is not None else None,
+        }
+
+    def _pick_agent(self, sel, owner: str = ""):
         """Choose a connected agent to run a selection the server registry can't cover. Prefers the
-        agent whose advertised catalog covers the most of the requirements/check-ids requested."""
+        agent whose advertised catalog covers the most of the requirements/check-ids requested. A run
+        only ever falls back to an agent OWNED BY the user who started it — a run never executes on
+        another user's agent (and thus never on their machine)."""
         hub = getattr(self, "hub", None)
         agents = hub.alive() if hub else []
+        if owner:
+            agents = [a for a in agents if getattr(a, "owner", "") == owner]
         if not agents:
             return None
         sel = sel or {}
@@ -1626,12 +1697,15 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
 
     # ---- dev/host agents (Mode A: run a developer's local working tree on the bench) ----
     def _own_agent(aid, me):
-        """Fetch an agent and check the caller may manage it (its owner, or an admin)."""
+        """Fetch an agent the caller OWNS. Operating an agent — browse/inspect, sync, run, AI
+        (enable/run), file read/write, scaffolding — is restricted to its OWNER. NOT even an admin
+        may drive another user's agent or its AI. (Admins can still list every agent and disconnect
+        any one; `agent_disconnect` enforces that separately.)"""
         s = hub.get(aid)
         if s is None:
             raise HTTPException(404, "unknown agent")
-        if not (me.get("is_admin") or getattr(s, "owner", "") == me["username"]):
-            raise HTTPException(403, "not your agent")
+        if getattr(s, "owner", "") != me["username"]:
+            raise HTTPException(403, "not your agent — only its owner can operate it")
         return s
 
     @app.get("/api/agents/token")                       # YOUR enrollment token (private to you)
@@ -1956,9 +2030,15 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
                 "checks": len(s.catalog or []), "requirements": len(s.req_files or []),
                 "sources": [{"name": x.get("name"), "sha1": x.get("head")} for x in (sources or [])]}
 
-    @app.delete("/api/agents/{aid}")                    # admin: disconnect — clears its overlay
+    @app.delete("/api/agents/{aid}")                    # owner OR admin: disconnect — clears its overlay
     def agent_disconnect(aid: str, me=Depends(require_login)):
-        s = _own_agent(aid, me)                          # owner or admin only
+        s = hub.get(aid)
+        if s is None:
+            raise HTTPException(404, "unknown agent")
+        # disconnect is the one management action an admin may take on someone else's agent —
+        # it only tears the session down (no browse/run/AI access to another user's machine).
+        if not (me.get("is_admin") or getattr(s, "owner", "") == me["username"]):
+            raise HTTPException(403, "only the agent's owner or an admin can disconnect it")
         s.cmds.put({"cmd": "stop"})                      # ask the agent to exit (so it won't re-register)
         return {"ok": hub.drop(aid)}
 

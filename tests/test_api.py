@@ -177,3 +177,55 @@ def test_testplan_capabilities_flags_missing(client):
     d = client.post("/api/test-plans/capabilities",
                     json={"suite": "s2", "bench": "tb2", "board": "b2"}).json()
     assert d["missing_drivers"] == ["mgmt"]
+
+
+def test_agent_hub_keeps_busy_session_past_idle_ttl():
+    """A session with an in-flight job (its poll loop blocked running a long headless AI job) must
+    NOT be reaped at the idle TTL, or the job is lost and the agent is forced to reconnect
+    ("the run was lost (agent reconnected?)"). It is reaped once the job is delivered and it goes
+    idle past busy_ttl."""
+    import threading
+    import time
+
+    from atf.web.agents import AgentHub
+
+    hub = AgentHub(ttl=0.15, busy_ttl=3.0)
+    s = hub.register("wiz", [], {}, "linux")
+    ev = threading.Event()
+    s.files["job"] = {"event": ev, "data": None}        # pending ai-run result
+    time.sleep(0.3)                                      # well past the idle ttl
+    assert s in hub.alive(), "busy session was reaped mid-job"
+    ev.set()
+    s.files["job"]["data"] = {"ok": True}               # result delivered → no longer busy
+    time.sleep(0.3)
+    assert s not in hub.alive(), "idle session should be reaped once no job is pending"
+
+
+def _login(client, user, pw):
+    r = client.__class__(client.app).post("/api/admin/login", json={"user": user, "password": pw})
+    return r.json()["token"]
+
+
+def test_agent_operations_are_owner_only(client):
+    """Operating an agent (inspect/sync/AI/run) is restricted to its OWNER — not even an admin may
+    drive another user's agent. Admins can still disconnect anyone's agent (teardown only)."""
+    # a regular user owns an agent
+    client.post("/api/users", json={"username": "alice", "password": "pw", "is_admin": False})
+    client.post("/api/users", json={"username": "mallory", "password": "pw", "is_admin": False})
+    alice = client.__class__(client.app)
+    alice.headers.update({"Authorization": "Bearer " + _login(client, "alice", "pw")})
+    tok = alice.get("/api/agents/token").json()["token"]
+    aid = client.__class__(client.app).post(
+        "/api/agents/register", json={"name": "alice-lap", "token": tok, "platform": "linux"}).json()["id"]
+
+    # owner passes the ownership gate (ai-run then fails only because AI is off) — NOT a 403
+    assert alice.post(f"/api/agents/{aid}/ai-run", json={"prompt": "hi"}).status_code == 400
+    # admin (not the owner) is refused — cannot drive someone else's agent or its AI
+    assert client.post(f"/api/agents/{aid}/ai-run", json={"prompt": "hi"}).status_code == 403
+    # another regular user is refused too
+    mallory = client.__class__(client.app)
+    mallory.headers.update({"Authorization": "Bearer " + _login(client, "mallory", "pw")})
+    assert mallory.post(f"/api/agents/{aid}/ai-run", json={"prompt": "hi"}).status_code == 403
+    assert mallory.delete(f"/api/agents/{aid}").status_code == 403        # non-owner regular can't disconnect
+    # admin may disconnect (the one management action allowed on another user's agent)
+    assert client.delete(f"/api/agents/{aid}").status_code == 200

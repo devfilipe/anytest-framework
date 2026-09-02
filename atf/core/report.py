@@ -277,6 +277,7 @@ def build_context(records: list[Record], boards: list[str], blocks: list[dict], 
         "mapped": bool(meta.get("select") and blocks and "tests" in blocks[0]),
         "run_id": meta.get("run_id") or (records[0].run_id if records else ""),
         "generated": meta.get("generated") or datetime.now().isoformat(timespec="seconds"),
+        "run": meta.get("run") or {},          # provenance: who ran it, when, agent/AI, framework/env
         "summary": counts,
         "requirements": blocks,
     }
@@ -297,10 +298,39 @@ _VERDICT_ORDER = ("gap", "error", "manual", "partial", "notrun", "na", "pass")
 def render_md(ctx: dict) -> str:
     """Requirement-first markdown: run header, elements under test, source versions, then one section
     per requirement (title · overall · description · how-to-verify · its tests with detail+verdict)."""
+    run = ctx.get("run") or {}
     L = [f"# Test report — {ctx['suite'] or 'ad-hoc run'}", "",
          f"- **Bench:** {ctx['bench'] or '—'}",
-         f"- **Run:** `{ctx['run_id']}` · {ctx['generated']}",
+         f"- **Run:** `{ctx['run_id']}` · {run.get('at') or ctx['generated']}",
          "- **Verdicts:** " + (" · ".join(f"{v}={n}" for v, n in ctx["summary"].items()) or "—"), ""]
+    if run:
+        fw = run.get("framework") or {}
+        env = run.get("environment") or {}
+        via = run.get("ran_via_agent")
+        L += ["## Run details", "",
+              f"- **Ran by:** {run.get('by') or '—'}",
+              f"- **When:** {run.get('at') or ctx['generated']}"]
+        if run.get("mgmt_backend"):
+            L.append(f"- **Mgmt backend:** {run['mgmt_backend']}")
+        if via:
+            ai = via.get("ai") or {}
+            ai_txt = (f"on ({ai.get('model') or 'default model'}"
+                      f"{'' if ai.get('claude') else ', no claude CLI'})") if ai.get("on") else "off"
+            L.append(f"- **Ran via agent:** {via.get('name')} `id:{via.get('id')}` "
+                     f"(owner {via.get('owner') or '—'}) · AI {ai_txt}")
+        else:
+            L.append("- **Ran via agent:** — (checks ran on the server)")
+        conn = run.get("agents_connected") or []
+        if conn:
+            L.append("- **Your agents connected at run time:** " +
+                     ", ".join(f"{a.get('name')} `id:{a.get('id')}`"
+                               f"{' · AI on' if (a.get('ai') or {}).get('on') else ''}" for a in conn))
+        fwv = (fw.get("commit") or "—") + (" · dirty" if fw.get("dirty") else "")
+        L.append(f"- **Framework:** {fwv}" + (f" ({fw.get('ref')})" if fw.get("ref") else ""))
+        if env:
+            L.append(f"- **Environment:** python {env.get('python') or '—'} · {env.get('platform') or '—'}"
+                     + (f" · host {env.get('host')}" if env.get("host") else ""))
+        L.append("")
     if ctx["bench_boards"]:
         L += ["## Element(s) under test", "", "| Board | Model | Serial |", "|---|---|---|"]
         L += [f"| {b['name']} | {b.get('model') or '—'} | {b.get('serial') or '—'} |" for b in ctx["bench_boards"]]
@@ -397,6 +427,42 @@ def render_html(ctx: dict) -> str:
     P.append('<div class="chips">' + "".join(
         f'{_badge(v)}<span class="sub" style="margin:0 10px 0 3px">{n}</span>'
         for v, n in ctx["summary"].items()) + "</div>")
+
+    run = ctx.get("run") or {}
+    if run:
+        fw = run.get("framework") or {}
+        env = run.get("environment") or {}
+        via = run.get("ran_via_agent")
+        rows = [("Ran by", _h(run.get("by") or "—")),
+                ("When", _h(run.get("at") or ctx["generated"]))]
+        if run.get("mgmt_backend"):
+            rows.append(("Mgmt backend", _h(run["mgmt_backend"])))
+        if via:
+            ai = via.get("ai") or {}
+            ai_txt = (f'on · {_h(ai.get("model") or "default model")}'
+                      + ("" if ai.get("claude") else ' · <span class="badge b-gap">no claude CLI</span>')) \
+                if ai.get("on") else "off"
+            rows.append(("Ran via agent",
+                         f'{_h(via.get("name"))} <code>id:{_h(via.get("id"))}</code> '
+                         f'<span class="sub">owner {_h(via.get("owner") or "—")}</span> · AI {ai_txt}'))
+        else:
+            rows.append(("Ran via agent", '<span class="sub">— (checks ran on the server)</span>'))
+        conn = run.get("agents_connected") or []
+        if conn:
+            rows.append(("Agents connected", ", ".join(
+                f'{_h(a.get("name"))} <code>id:{_h(a.get("id"))}</code>'
+                + (' <span class="badge b-pass">AI</span>' if (a.get("ai") or {}).get("on") else "")
+                for a in conn)))
+        fwv = f'<code>{_h(fw.get("commit") or "—")}</code>' + (' · dirty' if fw.get("dirty") else "") \
+            + (f' <span class="sub">{_h(fw.get("ref"))}</span>' if fw.get("ref") else "")
+        rows.append(("Framework", fwv))
+        if env:
+            rows.append(("Environment",
+                         f'python {_h(env.get("python") or "—")} · <span class="sub">{_h(env.get("platform") or "—")}</span>'
+                         + (f' · host {_h(env.get("host"))}' if env.get("host") else "")))
+        P.append("<h2>Run details</h2><table>"
+                 + "".join(f"<tr><th style='text-align:left;white-space:nowrap'>{k}</th><td>{v}</td></tr>"
+                           for k, v in rows) + "</table>")
 
     if ctx["bench_boards"]:
         P.append("<h2>Element(s) under test</h2><table><tr><th>Board</th><th>Model</th><th>Serial</th></tr>")

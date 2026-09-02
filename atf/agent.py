@@ -12,6 +12,7 @@ import os
 import platform
 import subprocess
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -425,10 +426,18 @@ def run(server: str, token: str, sources: list[str], name: str) -> int:
                     ai_path = res.get("path")
                     print(f"  🤖 AI pack → {res.get('path')} (claude CLI: {res.get('claude')})")
             elif cmd.get("cmd") == "ai-run":
+                # A headless Wizard run can take minutes. Run it in a BACKGROUND THREAD so this poll
+                # loop keeps heartbeating (otherwise the server's idle TTL reaps our session mid-run,
+                # the job is lost and we're forced to reconnect). The thread posts the result itself.
                 print(f"  🤖 running claude: {cmd.get('prompt','')[:70]}…")
-                res = _ai_run(cmd.get("path", ""), cmd.get("prompt", ""), resume=cmd.get("resume"),
-                              unrestricted=cmd.get("unrestricted", True), model=cmd.get("model", ""))
-                _post(f"{server}/api/agents/{aid}/file?token={cmd['token']}", res)
+                def _run_ai(c=cmd, _aid=aid):
+                    res = _ai_run(c.get("path", ""), c.get("prompt", ""), resume=c.get("resume"),
+                                  unrestricted=c.get("unrestricted", True), model=c.get("model", ""))
+                    try:
+                        _post(f"{server}/api/agents/{_aid}/file?token={c['token']}", res, timeout=60)
+                    except Exception as e:  # noqa: BLE001 - the run finished; just log a delivery failure
+                        print(f"  ⚠ couldn't deliver claude result: {e}")
+                threading.Thread(target=_run_ai, daemon=True).start()
             elif cmd.get("cmd") not in (None, "noop"):
                 # An unknown command means the server speaks a newer protocol than this agent build.
                 # Confirm the failure right away (if it carries a result token) so the server returns a
