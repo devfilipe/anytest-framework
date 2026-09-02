@@ -105,9 +105,18 @@ directly**).
 **Prefer the `atf` MCP tools** (auto-configured via `.mcp.json`) over raw curl:
 - `atf_catalog` — list all known tests (id, drivers, actions, mode, model).
 - `atf_suites` — list saved suites (requirement→test maps).
+- `atf_requirements` — list requirement catalogs (frameworks), or one framework's requirements.
 - `atf_scaffold` — scaffold a test on the agent's repo (`kind: auto|manual`, drivers/actions).
+- `atf_map` — save a suite's requirement→test map (ordered) and validate it.
+- `atf_benches` — list benches (or a bench's boards) to pick where to run.
 - `atf_run` — run a suite or ad-hoc ids against a bench/board.
 - `atf_report` — fetch a run's report (verdicts, drivers/actions, skip reasons, roll-up).
+- `atf_evidence` — fetch the raw evidence text a check wrote (what the probe saw) — for triage/debug.
+- `atf_api` — any REST endpoint the curated tools don't cover.
+
+The skills next to this file drive the common flows: **atf-author-driver-test** / **atf-author-manual-test**
+(create), **atf-debug-check** (implement → run local → read evidence → iterate), **atf-map-suite**
+(map requirements↔tests), **atf-run** (run + read), **atf-triage-report** (interpret a report).
 
 Authoring/editing files is done directly in the repos under `ATF_SOURCES` (Claude Code edits them).
 Never hardcode credentials; the MCP server reads them from `.atf-ai.env` / the environment. If the

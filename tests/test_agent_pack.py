@@ -53,3 +53,45 @@ def test_disconnect_prunes_dir_when_nothing_user_left(tmp_path):
     agent._ai_enable(str(dest), _pack_b64(), "http://s", "tok", aid="a1", sources=["/x"])
     agent._ai_disable(str(dest))
     assert not dest.exists()                             # pack-only dir is removed entirely
+
+
+def _load_mcp():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("atf_mcp", PACK_DIR / "atf_mcp.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_mcp_tools_present_and_wired(monkeypatch):
+    m = _load_mcp()
+    names = {t[0]["name"] for t in m.TOOLS}
+    assert {"atf_evidence", "atf_benches", "atf_requirements", "atf_map"} <= names   # phase-1 tools
+    calls = []
+
+    def fake_api(method, path, body=None):
+        calls.append((method, path, body))
+        return '{"ok": true}'
+    monkeypatch.setattr(m, "_api", fake_api)
+
+    m._BY_NAME["atf_evidence"][1]({"run_id": "r1", "path": "evidence/x-b1.txt"})
+    assert calls[-1][0] == "GET" and calls[-1][1].startswith("/api/evidence?") and "run_id=r1" in calls[-1][1]
+
+    m._BY_NAME["atf_benches"][1]({})
+    assert calls[-1] == ("GET", "/api/benches", None)
+    m._BY_NAME["atf_benches"][1]({"name": "lab"})
+    assert calls[-1][1] == "/api/benches/lab"
+
+    m._BY_NAME["atf_requirements"][1]({})
+    assert calls[-1][1] == "/api/requirements/frameworks"
+    m._BY_NAME["atf_requirements"][1]({"framework": "vivo"})
+    assert "framework=vivo" in calls[-1][1]
+
+    m._BY_NAME["atf_map"][1]({"name": "s1", "model": "tmd400g",
+                              "requirements": [{"id": "vivo:C.4", "tests": ["ping-dcn"]}]})
+    put = [c for c in calls if c[0] == "PUT"][-1]
+    assert put[1] == "/api/suites/s1"
+    sel = put[2]["select"]
+    assert sel["model"] == "tmd400g"
+    assert sel["requirements"][0] == {"id": "vivo:C.4", "fallback": "TEST_FAIL", "tests": [{"id": "ping-dcn"}]}
+    assert any(c[0] == "POST" and c[1] == "/api/suites/validate" for c in calls)

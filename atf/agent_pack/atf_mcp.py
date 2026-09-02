@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -93,6 +94,51 @@ def _t_api(a):
     return _api(method, path, a.get("body"))
 
 
+def _t_evidence(a):
+    """Raw evidence text a check wrote in a run — what the black-box probe actually saw. `path` is a
+    record's `evidence` field (e.g. 'evidence/mgmt-tls-b1.txt'); `run_id` from the report."""
+    qs = urllib.parse.urlencode({"path": a["path"], "run_id": a.get("run_id", "")})
+    return _api("GET", "/api/evidence?" + qs)
+
+
+def _t_benches(a):
+    """List benches to run against — or one bench's boards (pass `name`), so you know the bench/board
+    to give atf_run."""
+    name = (a.get("name") or "").strip()
+    return _api("GET", "/api/benches/" + urllib.parse.quote(name) if name else "/api/benches")
+
+
+def _t_requirements(a):
+    """The requirement catalogs (frameworks) or, with `framework`, the requirements in one — the
+    left-hand side of the suite map."""
+    fw = (a.get("framework") or "").strip()
+    if fw:
+        return _api("GET", "/api/requirements?framework=" + urllib.parse.quote(fw))
+    return _api("GET", "/api/requirements/frameworks")
+
+
+def _t_map(a):
+    """Save a suite's requirement→test map, then validate it. `requirements` is an ORDERED list of
+    {id, tests:[test-id,…], fallback}: run order = list order (setup→…→teardown); a requirement
+    passes iff every mapped test passed; no test → the fallback (TEST_PASS/TEST_FAIL) decides."""
+    reqs = a.get("requirements") or []
+    select = {"model": a.get("model", "") or "",
+              "requirements": [{"id": r["id"], "fallback": r.get("fallback", "TEST_FAIL"),
+                                "tests": [{"id": t} for t in (r.get("tests") or [])]}
+                               for r in reqs]}
+    put = _api("PUT", "/api/suites/" + urllib.parse.quote(a["name"]),
+               {"title": a.get("title", ""), "description": a.get("description", ""), "select": select})
+    validation = _api("POST", "/api/suites/validate", {"select": select})
+    return json.dumps({"saved": _loads(put), "validation": _loads(validation)}, ensure_ascii=False)
+
+
+def _loads(s):
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
 TOOLS = [
     ({"name": "atf_catalog", "description": "List all tests the framework knows (id, drivers, actions, mode, model) from the server + connected agents.",
       "inputSchema": {"type": "object", "properties": {}}}, _t_catalog),
@@ -113,6 +159,22 @@ TOOLS = [
           "drivers": {"type": "array", "items": {"type": "string"}}, "actions": {"type": "array", "items": {"type": "string"}},
           "severity": {"type": "string"}, "title": {"type": "string"}},
           "required": ["id", "source"]}}, _t_scaffold),
+    ({"name": "atf_evidence", "description": "Fetch the RAW evidence text a check wrote in a run (what the black-box probe actually saw) — for interpreting a gap or debugging. `path` is a record's `evidence` field from atf_report; `run_id` is the run.",
+      "inputSchema": {"type": "object", "properties": {
+          "run_id": {"type": "string"}, "path": {"type": "string", "description": "a record's evidence field, e.g. evidence/mgmt-tls-b1.txt"}},
+          "required": ["path"]}}, _t_evidence),
+    ({"name": "atf_benches", "description": "List benches to run against; pass `name` for one bench's boards. Use it to pick the bench + board for atf_run.",
+      "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}}, _t_benches),
+    ({"name": "atf_requirements", "description": "List requirement catalogs (frameworks); pass `framework` for the requirements in one. The left-hand side of a suite map.",
+      "inputSchema": {"type": "object", "properties": {"framework": {"type": "string"}}}}, _t_requirements),
+    ({"name": "atf_map", "description": "Save a suite's requirement→test map and validate it. `requirements` is an ORDERED list of {id, tests:[test-id…], fallback} — run order = list order (setup→…→teardown); a requirement passes iff every mapped test passed; with no test the fallback (TEST_PASS/TEST_FAIL) decides. Maps by test id (resolved at run time by the running user's own agent).",
+      "inputSchema": {"type": "object", "properties": {
+          "name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"},
+          "model": {"type": "string", "description": "'' = any board, or a model slug"},
+          "requirements": {"type": "array", "items": {"type": "object", "properties": {
+              "id": {"type": "string"}, "tests": {"type": "array", "items": {"type": "string"}},
+              "fallback": {"type": "string", "enum": ["TEST_PASS", "TEST_FAIL"]}}, "required": ["id"]}}},
+          "required": ["name", "requirements"]}}, _t_map),
     ({"name": "atf_api", "description": "Call ANY atf REST API endpoint — the general-purpose tool for anything the curated tools don't cover (inventory, benches, requirements, test-plans, board-models, reports list, suites CRUD/validate/export, …). Permissions are enforced by your session token: admin-only endpoints are denied. Examples: GET /api/inventory/boards, GET /api/benches, GET /api/requirements, GET /api/test-plans, GET /api/reports, PUT /api/suites/{name}. Prefer the specific tools (atf_catalog/atf_run/atf_report/…) for common flows.",
       "inputSchema": {"type": "object", "properties": {
           "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},
