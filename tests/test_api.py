@@ -229,3 +229,56 @@ def test_agent_operations_are_owner_only(client):
     assert mallory.delete(f"/api/agents/{aid}").status_code == 403        # non-owner regular can't disconnect
     # admin may disconnect (the one management action allowed on another user's agent)
     assert client.delete(f"/api/agents/{aid}").status_code == 200
+
+
+def test_one_agent_per_user_token(client):
+    """A user's enrollment token binds to ONE agent — a new registration retires the previous one."""
+    client.post("/api/users", json={"username": "bob", "password": "pw", "is_admin": False})
+    bob = client.__class__(client.app)
+    bob.headers.update({"Authorization": "Bearer " + _login(client, "bob", "pw")})
+    tok = bob.get("/api/agents/token").json()["token"]
+    a1 = client.__class__(client.app).post("/api/agents/register", json={"name": "m1", "token": tok}).json()["id"]
+    a2 = client.__class__(client.app).post("/api/agents/register", json={"name": "m2", "token": tok}).json()["id"]
+    ids = [a["id"] for a in bob.get("/api/agents").json() if a["owner"] == "bob"]
+    assert ids == [a2] and a1 not in ids                 # the first connection was retired
+
+
+def test_admin_endpoint_is_403_for_non_admin_not_401(client):
+    """A signed-in non-admin hitting an admin-only endpoint gets 403 (authorized-denied), NOT 401 —
+    a 401 makes the SPA wipe the valid session and log the user out."""
+    client.post("/api/users", json={"username": "carol", "password": "pw", "is_admin": False})
+    carol = client.__class__(client.app)
+    carol.headers.update({"Authorization": "Bearer " + _login(client, "carol", "pw")})
+    assert carol.get("/api/users").status_code == 403        # authenticated but not admin
+    assert client.__class__(client.app).get("/api/users").status_code == 401   # no session at all
+
+
+def test_builtin_admin_account_is_protected(client):
+    """The built-in 'admin' account can't be deleted nor demoted from admin."""
+    assert client.delete("/api/users/admin").status_code == 400
+    assert client.post("/api/users", json={"username": "admin", "is_admin": False}).status_code == 400
+
+
+def test_activity_view(client):
+    """The activity view reports signed-in users, connected agents, and run state — to ANY
+    signed-in user (read-only awareness), not just admins."""
+    client.post("/api/users", json={"username": "dave", "password": "pw", "is_admin": False})
+    dave = client.__class__(client.app)
+    dave.headers.update({"Authorization": "Bearer " + _login(client, "dave", "pw")})
+    assert dave.get("/api/activity").status_code == 200            # any signed-in user can view it
+    assert client.__class__(client.app).get("/api/activity").status_code == 401   # but not without a session
+    d = client.get("/api/activity").json()
+    assert {"users", "agents", "run", "locks"} <= set(d)
+    assert any(u["username"] == "admin" and u["is_admin"] for u in d["users"])
+    assert d["run"].get("active") is False
+
+
+def test_scaffold_writes_flat_under_model(tmp_path):
+    """A scaffolded auto test lands FLAT under its model — atf_checks/<model>/<slug>.py — with no
+    per-driver subfolder (the driver is declared in @register, not the path)."""
+    from atf.core import scaffold
+    root = tmp_path / "atf_checks"
+    p = scaffold.new_check(id="vlima-ping-mgmt", driver="mgmt", model="common", checks_root=str(root))
+    assert p == root / "common" / "vlima_ping_mgmt.py" and p.is_file()
+    p2 = scaffold.new_check(id="tls-legacy", driver="mgmt", model="tmd400g", checks_root=str(root))
+    assert p2 == root / "tmd400g" / "tls_legacy.py"

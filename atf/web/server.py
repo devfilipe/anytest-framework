@@ -283,6 +283,8 @@ class RunState:
             if via_agent is not None:              # an uploaded working tree isn't a git repo on the
                 _by_src = {s.get("name"): s for s in (via_agent.sources or [])}   # server, so server-side
                 for sd in (run_meta.get("sources") or []):                        # git can't read its sha —
+                    sd["agent"] = via_agent.name       # which agent/user provided these sources
+                    sd["owner"] = via_agent.owner
                     if not sd.get("commit"):                                      # use what the agent reported
                         a = _by_src.get(sd.get("name"))
                         if a:
@@ -691,16 +693,22 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
 
     def require_admin(authorization: str = Header(default="")):
         u = _user_of(authorization)
-        if not u or not u.get("is_admin"):
-            raise HTTPException(401, "admin authentication required")
+        if not u:
+            raise HTTPException(401, "authentication required")     # not signed in → re-login
+        if not u.get("is_admin"):
+            # signed in but not authorized: 403, NOT 401 — a 401 makes the SPA treat the session as
+            # dead and wipe a perfectly valid token, logging the user out when they merely opened an
+            # admin-only page.
+            raise HTTPException(403, "admin privileges required")
         return u
 
     @app.post("/api/admin/login")
     def admin_login(body: dict = Body(...)):
         u = repo.verify_user(body.get("user", ""), body.get("password", ""))
         if u:
+            import time as _t
             tok = pysecrets.token_hex(16)
-            tokens[tok] = u
+            tokens[tok] = {**u, "since": _t.time()}      # copy + login time (for the activity view)
             return {"ok": True, "token": tok, "user": u["username"], "is_admin": u["is_admin"]}
         raise HTTPException(401, "invalid credentials")
 
@@ -710,6 +718,26 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         if not u:
             raise HTTPException(401, "authentication required")
         return {"ok": True, "user": u["username"], "is_admin": u["is_admin"]}
+
+    @app.get("/api/activity")                           # who's signed in, agents connected, what's running
+    def activity(_=Depends(require_login)):             # visible to any signed-in user (read-only awareness)
+        import time as _t
+        now = _t.time()
+        by_user: dict = {}
+        for tv in tokens.values():                      # aggregate live sessions per user
+            un = tv.get("username", "")
+            e = by_user.setdefault(un, {"username": un, "is_admin": bool(tv.get("is_admin")),
+                                        "sessions": 0, "since": None})
+            e["sessions"] += 1
+            ts = tv.get("since")
+            if ts and (e["since"] is None or ts < e["since"]):
+                e["since"] = ts
+        users = sorted(({**e, "since_s": round(now - e["since"]) if e["since"] else None}
+                        for e in by_user.values()), key=lambda x: x["username"])
+        return {"now": now, "users": users,
+                "agents": [s.info() for s in hub.alive()],
+                "run": state.status(),                  # active pilot run (who/plan/waiting)
+                "locks": locks.held()}                  # any run holding bench resources
 
     @app.post("/api/admin/password")                    # change YOUR OWN password
     def admin_password(body: dict = Body(...), me=Depends(require_login)):
@@ -731,6 +759,8 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         if not repo.list_users() or not any(u["username"] == un for u in repo.list_users()):
             if not body.get("password"):
                 raise HTTPException(400, "new user needs a password")
+        if un == "admin" and not body.get("is_admin"):     # the built-in admin is always an admin
+            raise HTTPException(400, "the built-in 'admin' account must stay an admin")
         # never leave the store with zero admins
         if any(u["username"] == un and u["is_admin"] for u in repo.list_users()) \
                 and not body.get("is_admin") and repo.admin_count() <= 1:
@@ -747,6 +777,8 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
 
     @app.delete("/api/users/{username}")
     def users_delete(username: str, me=Depends(require_admin)):
+        if username == "admin":
+            raise HTTPException(400, "the built-in 'admin' account can't be deleted")
         if username == me["username"]:
             raise HTTPException(400, "you can't delete yourself")
         tgt = next((u for u in repo.list_users() if u["username"] == username), None)
@@ -870,7 +902,10 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(_STATIC / "index.html")
+        # The SPA is one self-contained file that changes on every deploy. Without Cache-Control the
+        # browser caches it heuristically and serves stale JS after an update. `no-cache` makes it
+        # revalidate against the ETag each load (304 when unchanged, fresh body when it changed).
+        return FileResponse(_STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
     # ---- read views ----
     @app.get("/api/summary")
@@ -1728,6 +1763,12 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         owner = repo.user_of_agent_token(body.get("token", ""))
         if not owner:
             raise HTTPException(401, "bad agent token")
+        # One agent per user token: a new connection RETIRES any existing one for this owner — the
+        # old process is asked to stop and its session (with its overlay) is dropped, so the newest
+        # connection wins and stale/duplicate sessions never linger.
+        for old in [a for a in hub.alive() if getattr(a, "owner", "") == owner]:
+            old.cmds.put({"cmd": "stop"})
+            hub.drop(old.id)
         s = hub.register(body.get("name", "agent"), body.get("sources"), body.get("vantages"),
                          body.get("platform", ""), body.get("catalog"), body.get("req_files"), owner=owner,
                          proto=int(body.get("proto") or 0))
@@ -1823,6 +1864,38 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             raise HTTPException(400, d.get("error", "write failed"))
         return d
 
+    def _agent_file_exists(s, source, path) -> bool:
+        """Does `source/path` already exist on the agent? Used to refuse to overwrite an existing
+        test when scaffolding a NEW one (the file-read returns ok=True only when the file is there)."""
+        tok, ev = hub.request_file(s, "read", source, path)
+        if not ev.wait(timeout=20) or s.files[tok]["data"] is None:
+            raise HTTPException(504, "agent did not respond to the file check")
+        return bool(s.files[tok]["data"].get("ok"))
+
+    def _agent_test_exists(s, cid, source, path) -> bool:
+        """A test with this id already exists on the agent? Guards a CREATE against overwriting. We
+        check BOTH the id in the agent's catalog (catches a same-id test at ANY path, incl. legacy
+        nested layouts) AND the exact target file — either one means "don't create, warn instead"."""
+        if any(c.get("id") == cid for c in (s.catalog or [])):
+            return True
+        return _agent_file_exists(s, source, path)
+
+    def _refresh_agent_catalog(s, mark_id=""):
+        """Ask the agent to re-scan its repos so a just-created test is immediately discoverable
+        (viewable/runnable) — otherwise the cached catalog wouldn't yet know the new id. When
+        `mark_id` is given, the freshly-created test is also marked as LOADED (added to the app's
+        snapshot) so it isn't wrongly flagged 'stale' — the app itself just created it, so the app's
+        copy already matches the agent's file (a real delta only means an EDIT outside the app)."""
+        try:
+            tok, ev = hub.request_catalog(s)
+            ev.wait(timeout=10)
+        except Exception:
+            pass
+        if mark_id:
+            c = next((c for c in (s.catalog or []) if c.get("id") == mark_id), None)
+            if c and c.get("path"):
+                s.loaded[c["path"]] = c.get("sha")
+
     def _csv_list(v):
         return ([x.strip() for x in v if str(x).strip()] if isinstance(v, list)
                 else [x.strip() for x in str(v or "").split(",") if x.strip()])
@@ -1844,7 +1917,11 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         fm.append("---")
         md = "\n".join(fm) + "\n\n" + (body.get("body") or _MANUAL_MD_BODY).rstrip() + "\n"
         path = f"atf_checks/{model}/manual/{cid}.md"   # manuals live under <model>/manual/, not a driver dir
+        if _agent_test_exists(s, cid, source, path):   # creating — never clobber an existing test
+            raise HTTPException(409, f"a test '{cid}' already exists on this agent — pick a different "
+                                     "id (the new-test form creates a file; it won't overwrite one)")
         _agent_write(s, source, path, md)
+        _refresh_agent_catalog(s, cid)                  # discoverable now + not wrongly flagged stale
         return {"ok": True, "id": cid, "path": path, "source": source}
 
     @app.post("/api/agents/{aid}/ai")                   # turn AI (Claude) on/off for an owned agent
@@ -1924,18 +2001,23 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             raise HTTPException(400, "need {id, source}")
         model = (body.get("model") or "common").strip() or "common"
         try:
-            slug, ddir, text = scaffold.render_check(
+            slug, _ddir, text = scaffold.render_check(
                 id=cid, drivers=_csv_list(body.get("drivers")), actions=_csv_list(body.get("actions")),
                 severity=body.get("severity", "medium"), title=body.get("title", ""))
         except ValueError as e:
             raise HTTPException(400, str(e))
-        path = f"atf_checks/{model}/{ddir}/{slug}.py"
+        path = f"atf_checks/{model}/{slug}.py"          # flat under the model — atf_checks/<model>/<slug>.py
+        if _agent_test_exists(s, cid, source, path):   # creating — never clobber an existing test
+            raise HTTPException(409, f"a test '{cid}' already exists on this agent — pick a different "
+                                     "id (the new-test form creates a file; it won't overwrite one)")
         _agent_write(s, source, path, text)
+        _refresh_agent_catalog(s, cid)                  # discoverable now + not wrongly flagged stale
         return {"ok": True, "id": cid, "path": path, "source": source}
 
-    def _parse_agent_reqs(req_files, origin) -> list:
+    def _parse_agent_reqs(req_files, origin, owner="", agent="") -> list:
         """Parse an agent's raw requirements/*.yaml (server has yaml) → full requirement rows tagged
-        with the agent origin + its source repo. Overlay-only — never written to the DB."""
+        with the agent origin + its source repo (and the owning user/agent). Overlay-only — never
+        written to the DB."""
         out = []
         for rf in (req_files or []):
             try:
@@ -1946,7 +2028,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
                     row = {"id": f"{fw}:{code}", "framework": fw, "code": code,
                            "title": mrow.get("title", ""), "desc": mrow.get("desc", ""),
                            "verify": mrow.get("verify", ""), "priority": mrow.get("priority"),
-                           "source": src, "origin": origin}
+                           "source": src, "origin": origin, "owner": owner, "agent": agent}
                     out.append({**row, "sha": reqmeta.requirement_sha(row)})
             except Exception:
                 pass
@@ -1968,11 +2050,11 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             except Exception:
                 pass
             # delta = the file on the agent changed since the app last loaded it (connect/Sync)
-            out.append({"id": s.id, "name": s.name,
-                        "checks": [{**c, "origin": f"agent:{s.name}",
+            out.append({"id": s.id, "name": s.name, "owner": s.owner,
+                        "checks": [{**c, "origin": f"agent:{s.name}", "owner": s.owner, "agent": s.name,
                                     "delta": c.get("sha") != s.loaded.get(c.get("path"))}
                                    for c in (checks or [])],
-                        "requirements": _parse_agent_reqs(s.req_files, f"agent:{s.name}"),
+                        "requirements": _parse_agent_reqs(s.req_files, f"agent:{s.name}", s.owner, s.name),
                         "req_files": s.req_files})
         return {"agents": out}
 

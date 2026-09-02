@@ -138,6 +138,7 @@
       <button data-t="locks">🔒&nbsp; Locks</button>
       <div class="nav-group">View</div>
       <button data-t="reports" class="on">🗎&nbsp; Reports</button>
+      <button data-t="activity">📡&nbsp; Activity</button>
       <button data-t="docs">📖&nbsp; Documentation</button>
       <div class="nav-group">Studio</div>
       <button data-t="ad-agents">🖧&nbsp; Agents</button>
@@ -183,8 +184,31 @@ async function fetchAgentCatalog(){
   }catch(e){}
   return {agents:[],unauth:false};
 }
+// The logged-in user's OWN agents (agent operations are owner-only), each with the repos it MANAGES
+// (its registered working trees) — used to author tests: you pick your own agent + one of its repos.
+async function ownAgents(){
+  await loginOk();                                   // make sure ADMIN_USER is populated
+  let list=[]; try{ const r=await adminFetch("/api/agents"); if(r.ok) list=(await r.json())||[]; }catch(e){}
+  return list.filter(a=>a.owner===ADMIN_USER).map(a=>({id:a.id,name:a.name,
+    repos:[...new Set((a.sources||[]).map(s=>s.name).filter(Boolean))]}));
+}
 function adminBanner(tab){ return `<div class="badge danger" style="display:block;padding:9px 11px;margin:8px 0"><b>Sign in as admin</b> to load agent-provided tests &amp; catalogs (no server repos are configured, so a connected agent is the only source). <a onclick="ensureAdmin().then(ok=>ok&&render('${tab}'))" style="margin-left:6px">Sign in ▸</a></div>`; }
 let ADMIN_USER="", ADMIN_IS=false;
+// ---- artifact ownership filter: agent-provided tests/requirements are tagged with an owner; by
+// default show only YOUR OWN (+ shared server artifacts). Toggle to all, or to a specific owner. ----
+let ARTFILTER="mine"; try{ ARTFILTER=sessionStorage.getItem("atf-artfilter")||"mine"; }catch(e){}
+function setArtFilter(v){ ARTFILTER=v||"mine"; try{ sessionStorage.setItem("atf-artfilter",ARTFILTER); }catch(e){} }
+function artVisible(it){ const o=it&&it.owner; if(!o) return true;   // server/shared (no owner) — always
+  if(ARTFILTER==="all") return true; if(ARTFILTER==="mine") return o===ADMIN_USER; return o===ARTFILTER; }
+function artOwners(items){ return [...new Set((items||[]).map(i=>i&&i.owner).filter(Boolean))].sort(); }
+function artFilterControl(items,rerender){
+  const owners=artOwners(items).filter(o=>o!==ADMIN_USER);
+  const opt=(v,l)=>`<option value="${esc(v)}" ${ARTFILTER===v?'selected':''}>${esc(l)}</option>`;
+  return `<label class="muted" style="font-size:12px;white-space:nowrap" title="Whose agent-provided tests/requirements to show. Shared server artifacts are always shown.">Show <select class="f" style="width:auto;display:inline-block;padding:2px 6px;margin:0" onchange="setArtFilter(this.value);${rerender}">`
+    +opt("mine","mine only")+opt("all","all (everyone)")
+    +(owners.length?`<optgroup label="by owner">`+owners.map(o=>opt(o,o)).join("")+`</optgroup>`:"")
+    +`</select></label>`;
+}
 async function adminOk(){ if(!ADMIN_TOKEN) return false; try{ const r=await adminFetch("/api/admin/whoami"); if(!r.ok) return false; const d=await r.json(); ADMIN_USER=d.user||""; ADMIN_IS=!!d.is_admin; return ADMIN_IS; }catch(e){ return false; } }
 
 function _authHdr(){ return ADMIN_TOKEN?{"Authorization":"Bearer "+ADMIN_TOKEN}:{}; }
@@ -246,6 +270,7 @@ function render(tab){
   if(tab==="st-wizard") return loginGate(m,renderWizardTab);
   if(tab==="ad-users") return adminGate(m,renderUsersAdmin);
   if(tab==="ad-backup") return adminGate(m,renderBackupAdmin);
+  if(tab==="activity") return loginGate(m,renderActivity);
   if(tab==="docs") return renderDocs(m);
 }
 
@@ -465,6 +490,33 @@ async function restoreBackup(btn){ const f=$("#bk-file").files[0], msg=$("#rs-ms
   }finally{ btn.disabled=false; }
 }
 // ---- Admin › Agents (dev/host agents; Mode A: run a local working tree on the bench) ----
+function _dur(s){ if(s==null) return "—"; s=Math.max(0,Math.round(s)); if(s<60) return s+"s"; if(s<3600) return Math.floor(s/60)+"m"; return Math.floor(s/3600)+"h "+Math.floor((s%3600)/60)+"m"; }
+async function renderActivity(m){
+  const draw=async()=>{
+    if((document.querySelector("#nav button.on")?.dataset.t)!=="activity"){ clearInterval(window._ACT_T); return; }  // navigated away
+    let d=null; try{ const r=await adminFetch("/api/activity"); if(r.ok) d=await r.json(); }catch(e){}
+    const host=$("#act-body"); if(!host) return;
+    if(!d){ host.innerHTML='<p class="muted">could not load activity</p>'; return; }
+    const run=d.run||{}, locks=d.locks||[];
+    let rn;
+    if(run.active){ const plan=run.plan||[], wait=run.waiting_on;
+      rn=`<span class="badge warn">running</span> <strong>${esc(run.who||"")}</strong>`
+        +(plan.length?` · ${plan.length} check(s): <span class="muted">${esc(plan.join(", "))}</span>`:"")
+        +(run.cancelling?' <span class="badge danger">cancelling</span>':"")
+        +(wait?`<br><span class="muted">waiting on operator — ${esc(wait.check||"")}</span>`:""); }
+    else if(locks.length){ rn=`<span class="badge warn">running</span> <span class="muted">holding: ${locks.map(l=>esc(l.resource)+" ("+esc(l.who)+")").join(", ")}</span>`; }
+    else rn='<span class="badge ok">idle</span> <span class="muted">no test running</span>';
+    const users=(d.users||[]).map(u=>`<tr><td class="req">${esc(u.username)}${u.username===ADMIN_USER?' <span class="muted">(you)</span>':''}</td><td>${u.is_admin?'<span class="pill origin-ag">admin</span>':'<span class="pill">user</span>'}</td><td class="muted">${u.sessions}</td><td class="muted">${_dur(u.since_s)}</td></tr>`).join("")||'<tr><td colspan="4" class="muted">no active sessions</td></tr>';
+    const ags=(d.agents||[]).map(a=>{const ai=a.ai||{}, srcs=(a.sources||[]).map(s=>esc(s.name)).join(", ")||'—';
+      return `<tr><td class="req">${esc(a.name)}</td><td>${esc(a.owner||"?")}</td><td class="muted">${esc(a.platform||"")}</td><td>${ai.on?`<span class="badge ok">AI${ai.model?" · "+esc(ai.model):""}</span>`:'<span class="muted">—</span>'}</td><td class="muted">${esc(""+(a.idle!=null?a.idle:"?"))}s</td><td class="muted">${srcs}</td></tr>`;}).join("")||'<tr><td colspan="6" class="muted">no agents connected</td></tr>';
+    host.innerHTML=`<div class="panel"><div class="sec-title" style="margin-top:0">Running now</div><div>${rn}</div></div>`
+      +`<div class="panel"><div class="sec-title">Signed-in users <span class="muted" style="font-weight:400">(${(d.users||[]).length})</span></div><table><tr><th>User</th><th>Role</th><th>Sessions</th><th>Signed in</th></tr>${users}</table></div>`
+      +`<div class="panel"><div class="sec-title">Connected agents <span class="muted" style="font-weight:400">(${(d.agents||[]).length})</span></div><div style="overflow-x:auto"><table><tr><th>Name</th><th>Owner</th><th>Platform</th><th>AI</th><th>Idle</th><th>Repos</th></tr>${ags}</table></div></div>`;
+  };
+  m.innerHTML=`<div class="panel" style="margin-bottom:0"><div class="row" style="justify-content:space-between;margin:0"><div class="sec-title" style="margin:0">📡 Activity ${hlp("Live overview — signed-in users, connected agents, and whether a test is running. Auto-refreshes.")}</div><span class="muted" style="font-size:11px">auto-refresh · every 4s</span></div></div><div id="act-body"></div>`;
+  await draw();
+  clearInterval(window._ACT_T); window._ACT_T=setInterval(draw,4000);
+}
 async function renderAgentsAdmin(m){
   const [agents,tokRes]=await Promise.all([
     adminFetch("/api/agents").then(r=>r.json()).catch(()=>[]),
@@ -626,7 +678,6 @@ function diffHtml(t){
 }
 // ---- Agent: Browse (provided requirements + tests + delta, view/edit) · Sync · Disconnect ----
 async function browseAgent(aid,name){
-  if(!await ensureLoggedIn()) return;   // owner-only; the server enforces ownership
   const [cat,insp]=await Promise.all([
     adminFetch("/api/agents/catalog").then(r=>r.json()).catch(()=>({})),
     adminFetch("/api/agents/"+encodeURIComponent(aid)+"/inspect").then(r=>r.json()).catch(()=>({}))]);
@@ -664,7 +715,6 @@ async function browseAgent(aid,name){
   editorPage("Browse · "+name, h, "ad-agents");
 }
 async function syncAgent(aid,name){
-  if(!await ensureLoggedIn()) return;   // owner-only; the server enforces ownership
   const r=await adminFetch("/api/agents/"+encodeURIComponent(aid)+"/sync",{method:"POST"});
   const d=await r.json().catch(()=>({}));
   if(!r.ok){ openModal(`<h2>Sync failed</h2><p class="muted">${esc(d.detail||("HTTP "+r.status))}</p>`); return; }
@@ -672,7 +722,6 @@ async function syncAgent(aid,name){
   openModal(`<h2>Synced · ${esc(name)}</h2><p class="muted">Pulled ${d.checks} test(s) · ${d.requirements} requirement catalog(s) into the platform.</p><p style="margin-top:8px">${src||'<span class="muted">no sources</span>'}</p><div class="form-actions"><button class="act" onclick="closeModal();render('ad-agents')">OK</button></div>`);
 }
 async function disconnectAgent(aid,name){
-  if(!await ensureLoggedIn()) return;   // owner OR admin; the server enforces it
   if(!confirm("Disconnect agent "+name+"?\nEverything it provided (tests + requirement catalogs) will be cleared from the platform."))return;
   await adminFetch("/api/agents/"+encodeURIComponent(aid),{method:"DELETE"});
   render("ad-agents");
@@ -691,7 +740,7 @@ async function catalogInstances(fws,agents){
     origin:f.synced?"app":"user", source:f.synced?((f.sources||[])[0]||"—"):"—", server:true}));
   if(agents==null){ agents=(await fetchAgentCatalog()).agents; }
   agents.forEach(a=>{ const byFw={},srcBy={}; (a.requirements||[]).forEach(r=>{(byFw[r.framework]=byFw[r.framework]||new Set()).add(r.id); if(r.source)srcBy[r.framework]=r.source;});
-    Object.entries(byFw).forEach(([fw,ids])=>rows.push({framework:fw,count:ids.size,origin:"agent",agent:a.name,source:srcBy[fw]||"—",server:false})); });
+    Object.entries(byFw).forEach(([fw,ids])=>rows.push({framework:fw,count:ids.size,origin:"agent",agent:a.name,owner:a.owner,source:srcBy[fw]||"—",server:false})); });
   return rows;
 }
 function insertedByCell(r){
@@ -726,11 +775,13 @@ async function renderReqs(m){
 // STUDIO editor: catalogs + per-requirement CRUD + YAML import.
 async function renderReqsEditor(m){
   const fws=await j("/api/requirements/frameworks");
-  const [catRows,allReqs]=await Promise.all([catalogInstances(fws),j("/api/requirements")]);
+  const [_allCat,allReqs]=await Promise.all([catalogInstances(fws),j("/api/requirements")]);
+  const catRows=_allCat.filter(artVisible);            // ownership filter (server catalogs always shown)
   const byFw={}; (allReqs||[]).forEach(q=>{(byFw[q.framework]=byFw[q.framework]||[]).push(q);});
-  let h='<div class="panel"><div class="sec-title">Requirement catalogs '+hlp("One entry per catalog × who inserted it: app (loaded from a server repo — Admin › Repositories), user (created in the app), or agent:<name> (a connected tester agent). Only user/app catalogs are editable here; agent ones are edited in the agent's repo.")+'</div><button class="act" onclick="newFramework()">+ New catalog</button> <button class="btn-ghost" onclick="importReqs()">Import YAML…</button>';
-  h+='<p class="muted" style="margin:6px 0 0">Grouped by catalog — click to expand. <span class="pill origin-up">app</span> from a server repo · <span class="pill">user</span> created here · <span class="pill origin-ag">agent:&lt;name&gt;</span> a connected agent.</p>';
-  catRows.forEach(r=>{
+  let h='<div class="panel"><div class="row" style="justify-content:space-between;margin-top:0"><div class="sec-title" style="margin:0">Requirement catalogs '+hlp("One entry per catalog × who inserted it: app (loaded from a server repo — Admin › Repositories), user (created in the app), or agent:<name> (a connected tester agent). Only user/app catalogs are editable here; agent ones are edited in the agent's repo.")+'</div>'+artFilterControl(_allCat,"render('st-reqs')")+'</div><button class="act" onclick="newFramework()">+ New catalog</button> <button class="btn-ghost" onclick="importReqs()">Import YAML…</button>';
+  h+='<p class="muted" style="margin:6px 0 0">Grouped by <b>agent</b> (or the server) → catalog — click a catalog to expand. Server catalogs are editable here; a connected agent\'s are edited in its repo.</p>';
+  // OUTER grouping by agent (or the server): one section header per source, catalogs nested under it.
+  const renderCat=(r)=>{
     const reqs=byFw[r.framework]||[];
     const n=r.server?reqs.length:r.count;
     let toolbar,table='';
@@ -741,9 +792,17 @@ async function renderReqsEditor(m){
     } else {
       toolbar=`<div class="muted" style="margin:8px 12px"><a onclick="viewAgentReqs('${esc(r.agent)}','${esc(r.framework)}')">view in the agent</a> — edited in the agent's repo</div>`;
     }
-    h+=`<details style="margin-top:8px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden">`
-      +`<summary style="padding:9px 12px;background:var(--raised);border-left:3px solid var(--acc);cursor:pointer">📑 <strong style="font-size:13px">${esc(r.framework)}</strong> ${insertedByCell(r)} ${r.source?`<span class="muted" style="font-size:11px">${esc(r.source)}</span>`:''} <span class="muted" style="font-size:11px">· ${n} requirement${n!==1?'s':''}</span></summary>`
+    return `<details style="margin-top:6px;margin-left:10px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden">`
+      +`<summary style="padding:9px 12px;background:var(--raised);border-left:3px solid var(--acc);cursor:pointer">📑 <strong style="font-size:13px">${esc(r.framework)}</strong> ${r.origin==="user"?'<span class="pill">user</span> ':''}${r.source?`<span class="muted" style="font-size:11px">${esc(r.source)}</span>`:''} <span class="muted" style="font-size:11px">· ${n} requirement${n!==1?'s':''}</span></summary>`
       +toolbar+table+`</details>`;
+  };
+  const catOuters={}; catRows.forEach(r=>{ const k=r.origin==="agent"?("A\t"+(r.agent||"")+"\t"+(r.owner||"")):"S"; (catOuters[k]=catOuters[k]||[]).push(r); });
+  Object.keys(catOuters).sort((a,b)=>(a==="S"?-1:b==="S"?1:a.localeCompare(b))).forEach(ok=>{
+    let label;
+    if(ok==="S"){ label='<span class="pill origin-up">server catalogs</span>'; }
+    else{ const parts=ok.split("\t"); label=`<span class="pill origin-ag">agent: ${esc(parts[1])}</span>${parts[2]?` <span class="muted">(${esc(parts[2])})</span>`:''}`; }
+    h+=`<div class="sec-title" style="margin:14px 0 2px;font-size:12px">${label} <span class="muted" style="font-weight:400;font-size:11px">· ${catOuters[ok].length} catalog${catOuters[ok].length>1?'s':''}</span></div>`;
+    catOuters[ok].forEach(r=>{ h+=renderCat(r); });
   });
   h+=(catRows.length?'':'<p class="muted" style="margin-top:8px">no catalogs</p>')+'</div>';
   m.innerHTML=h;
@@ -841,9 +900,10 @@ async function renderSuites(m){
 }
 async function renderChecks(m){
   const meta=await j("/api/meta");
-  let h='<div class="panel"><div class="sec-title">Tests '+hlp("Tests live as files in the check-source repos under atf_checks/<model>/. Automated = Python @register modules (.py); manual = Markdown artifacts (.md) run as mode=manual. Both are discovered, synced and versioned the same way; the Suite maps requirements↔tests.")+'</div><button class="act" onclick="newCheck()">+ New auto test</button> <button class="act" onclick="newManualTest()">+ New manual test</button>';
   const _ov=await fetchAgentCatalog();
-  const agentChecks=_ov.agents.flatMap(a=>(a.checks||[]).map(c=>({...c,_aid:a.id})));
+  const _allAgentChecks=_ov.agents.flatMap(a=>(a.checks||[]).map(c=>({...c,_aid:a.id})));
+  let h='<div class="panel"><div class="row" style="justify-content:space-between;margin-top:0"><div class="sec-title" style="margin:0">Tests '+hlp("Tests live as files in the check-source repos under atf_checks/<model>/. Automated = Python @register modules (.py); manual = Markdown artifacts (.md) run as mode=manual. Both are discovered, synced and versioned the same way; the Suite maps requirements↔tests.")+'</div>'+artFilterControl(_allAgentChecks,"render('st-checks')")+'</div><button class="act" onclick="newCheck()">+ New auto test</button> <button class="act" onclick="newManualTest()">+ New manual test</button>';
+  const agentChecks=_allAgentChecks.filter(artVisible);   // ownership filter (default: mine + shared)
   if(_ov.unauth) h+=adminBanner("st-checks");
   // per-artifact delta comes from the catalog: c.delta = the file on the agent changed since the app
   // last loaded it (connect / Sync). App tests have no delta (they ARE the app).
@@ -855,8 +915,12 @@ async function renderChecks(m){
   h+=`<p class="muted" style="margin:6px 0 0">Grouped by <strong>repo</strong>. <span class="pill origin-up">git:&lt;owner/repo&gt;</span> a synced Repository · <span class="pill origin-up">app</span> a local server source (ATF_CHECK_SOURCES) · <span class="pill origin-ag">agent:&lt;name&gt;</span> a connected agent · <span class="badge muted">manual</span> a Markdown artifact · header <span class="badge ok">synced</span>/<span class="badge danger">uncommitted</span> = the source's git state at the shown revision · the Sync column <span class="badge ok">up-to-date</span>/<span class="badge danger">stale</span> = whether the app's copy still matches the agent's file (Sync to reload)</p>`;
   const grp={}; codeChecks.forEach(c=>{ const k=srcOfChk(c)+"\t"+(c.source||"—"); (grp[k]=grp[k]||[]).push(c); });
   const gkeys=Object.keys(grp).sort((a,b)=>{ const oa=a.split("\t")[0], ob=b.split("\t")[0]; return (oa.startsWith("agent")?1:0)-(ob.startsWith("agent")?1:0) || a.localeCompare(b); });
-  gkeys.forEach(k=>{ const origin=k.split("\t")[0], repo=k.split("\t")[1]; const c0=grp[k][0];
-    const ins=origin.startsWith("agent")?`<span class="pill origin-ag">${esc(origin)}</span>`
+  // OUTER grouping by agent (or the server): the agent is shown once as a section header, and its
+  // repos nest under it — instead of repeating an agent badge on every repo group.
+  const outerKey=k=>{ const o=k.split("\t")[0]; return o.startsWith("agent")?("A\t"+o):"S"; };
+  const outers={}; gkeys.forEach(k=>{ (outers[outerKey(k)]=outers[outerKey(k)]||[]).push(k); });
+  const renderRepo=(k)=>{ const origin=k.split("\t")[0], repo=k.split("\t")[1]; const c0=grp[k][0];
+    const ins=origin.startsWith("agent")?''            // the outer agent header already says who
       :c0.source_kind==="git"?`<span class="pill origin-up">git:${esc(c0.git||repo)}</span>`
       :c0.source_kind==="path"?`<span class="pill origin-up">path:${esc(c0.git||repo)}</span>`
       :`<span class="pill origin-up">app</span>`;
@@ -878,18 +942,25 @@ async function renderChecks(m){
         :ag?(c._aid&&c.mode!=='manual'?`<a onclick="editAgentCheckCode('${esc(c._aid)}','${esc(c.id)}')">view/edit code</a>`:'<span class="muted">—</span>')
         :(c.mode!=='manual'?`<a onclick="editCheckCode('${esc(c.id)}')">${ro?'view code':'edit code'}</a>`:'<span class="muted">—</span>');
       rows+=`<tr><td class="req">${esc(c.id)}</td><td>${c.model?`<span class="pill">${esc(c.model)}</span>`:'<span class="muted">common</span>'}</td><td>${chkDeltaBadge(c)}</td><td>${capPills(c)}</td><td>${c.disruptive?'<span class="badge danger">disruptive</span> ':''}<span class="badge muted">${esc(c.mode)}</span></td><td>${act}</td></tr>`;});
-    h+=`<details style="margin-top:8px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden">`
-      +`<summary style="padding:9px 12px;background:var(--raised);border-left:3px solid var(--acc);cursor:pointer">📦 <strong style="font-size:13px">${esc(repo)}</strong> ${ins} ${sep} <span class="muted" style="font-size:11px">· ${grp[k].length} test${grp[k].length>1?'s':''}</span></summary>`
+    return `<details style="margin-top:6px;margin-left:10px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden">`
+      +`<summary style="padding:9px 12px;background:var(--raised);border-left:3px solid var(--acc);cursor:pointer">📦 <strong style="font-size:13px">${esc(repo)}</strong> ${ins?ins+' ':''}${sep} <span class="muted" style="font-size:11px">· ${grp[k].length} test${grp[k].length>1?'s':''}</span></summary>`
       +`<table style="margin:0"><tr><th>Test</th><th>Model</th><th>Sync</th><th>Drivers · actions</th><th>Mode</th><th></th></tr>${rows}</table></details>`;
+  };
+  Object.keys(outers).sort((a,b)=>(a==="S"?-1:b==="S"?1:a.localeCompare(b))).forEach(ok=>{
+    let label;
+    if(ok==="S"){ label='<span class="pill origin-up">server sources</span>'; }
+    else{ const o=ok.slice(2); const c0=grp[outers[ok][0]][0];
+      label=`<span class="pill origin-ag">${esc(o)}</span>${c0.owner?` <span class="muted">(${esc(c0.owner)})</span>`:''}`; }
+    h+=`<div class="sec-title" style="margin:14px 0 2px;font-size:12px">${label} <span class="muted" style="font-weight:400;font-size:11px">· ${outers[ok].length} repo${outers[ok].length>1?'s':''}</span></div>`;
+    outers[ok].forEach(k=>{ h+=renderRepo(k); });
   });
-  h+='<p class="muted" style="margin-top:10px">Grouped by repo — click a repo to expand. <b>New auto test</b> scaffolds a <code>.py</code>; <b>New manual test</b> scaffolds a <code>.md</code> on the agent repo. Tests from a <b>git</b> Repository are <b>view-only</b> (edit in the repo → Sync); local/path sources & agents are editable.</p></div>';
+  h+='<p class="muted" style="margin-top:10px">Grouped by <b>agent</b> (or server source) → repo — click a repo to expand. <b>New auto/manual test</b> scaffolds on the agent repo. Tests from a <b>git</b> Repository are view-only (edit in the repo → Sync); local/path &amp; agent sources are editable.</p></div>';
   m.innerHTML=h;
 }
 // A manual test is a Markdown artifact (frontmatter + body) in the agent's repo — edit the raw
 // file with a live rendered preview, exactly like editing code but rendered. No requirements picker:
 // the Suite maps requirements↔tests; the frontmatter `requirements:` is only an advisory suggestion.
 async function editAgentCheckMd(aid,cid){
-  if(!await ensureAdmin()) return;
   const r=await adminFetch("/api/agents/"+encodeURIComponent(aid)+"/checks/"+encodeURIComponent(cid)+"/source");
   const d=await r.json().catch(()=>({}));
   if(!r.ok){ openModal(`<h2>Can't open ${esc(cid)}</h2><p class="muted">${esc(d.detail||("HTTP "+r.status))}</p>`); return; }
@@ -935,11 +1006,9 @@ async function saveCheckMd(id){
   if(msg) msg.textContent=d.ok?"saved + re-discovered ✓":("not saved: "+(d.error||d.detail||("HTTP "+r.status)));
 }
 async function newManualTest(){
-  if(!await ensureAdmin()) return;
-  const ov=await fetchAgentCatalog();
-  const agents=ov.agents||[];
-  if(!agents.length){ openModal('<h2>New manual test</h2><p class="muted">No agent connected. A manual test is a Markdown file in a check-source repo the agent serves — connect an agent (Studio › Agents) first.</p>'); return; }
-  const srcOf=a=>[...new Set((a.checks||[]).map(c=>c.source).filter(Boolean))];
+  const agents=await ownAgents();                    // only YOUR agents (app is already login-gated)
+  if(!agents.length){ openModal('<h2>New manual test</h2><p class="muted">You have no agent connected. A manual test is a Markdown file in a check-source repo <b>your</b> agent serves — connect your own agent (Studio › Agents) first.</p>'); return; }
+  const srcOf=a=>a.repos;                             // repos the agent manages
   const agOpts=agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("");
   let h=`<h2>New manual test</h2><p class="muted">Scaffolds <code>atf_checks/&lt;model&gt;/manual/&lt;id&gt;.md</code> on the agent repo. Edit the steps after.</p>`;
   h+=`<div class="grid2"><div class="field"><label>Agent</label><select class="f" id="nm-agent" onchange="nmSrcOpts()">${agOpts}</select></div>`
@@ -956,7 +1025,7 @@ async function newManualTest(){
   openModal(h); nmSrcOpts();
 }
 function nmSrcOpts(){ const a=$("#nm-agent")?.value, srcs=(window._NM_SRC||{})[a]||[]; const sel=$("#nm-src");
-  if(sel) sel.innerHTML=srcs.length?srcs.map(s=>`<option>${esc(s)}</option>`).join(""):'<option value="">(no repo — agent has no checks yet)</option>'; }
+  if(sel) sel.innerHTML=srcs.length?srcs.map(s=>`<option>${esc(s)}</option>`).join(""):'<option value="">(this agent manages no repo)</option>'; }
 async function createManualTest(){
   const aid=$("#nm-agent").value, id=($("#nm-id").value||"").trim(), source=$("#nm-src").value;
   const msg=$("#nm-msg"); if(!id){ if(msg)msg.textContent="id required"; return; }
@@ -1355,11 +1424,23 @@ function renderMapTable(){
 }
 function _suitePicker(rq){
   const has=new Set(rq.tests.map(t=>t.id));
-  const avail=SUITE_TESTS.filter(_testApplies);
-  const row=t=>{const ag=(t.origin||"").startsWith("agent");
-    return `<label style="display:inline-flex;align-items:center;gap:6px;margin:2px 14px 2px 0;cursor:pointer"><input type="checkbox" ${has.has(t.id)?'checked':''} onchange="suiteToggleTest('${esc(rq.id)}','${esc(t.id)}')"> <span class="req">${esc(t.id)}</span> ${capPills(t)} <span class="pill ${ag?'origin-ag':'origin-up'}" style="font-size:10px">${ag?esc(t.origin):'app'}</span>${t.model?` <span class="muted">[${esc(t.model)}]</span>`:''}${t.disruptive?' <span class="badge danger">⚠</span>':''}</label>`; };
-  let h=`<div class="muted" style="margin-bottom:4px">Pick the tests that validate <b>${esc(rq.code)}</b>. `+(SMAP.model?`(model <code>${esc(SMAP.model)}</code>)`:'(any model)')+`</div>`;
-  h+=`<div style="margin-top:3px">${avail.length?avail.map(row).join(""):'<span class="muted">no tests available for this model</span>'}</div>`;
+  // Pool = tests for this model, passing the ownership filter (default: mine + shared). GROUP by
+  // repo/agent (like the Tests page) — do NOT dedupe across groups: each source shows ALL its own
+  // tests (so nothing "disappears" into another agent's group). The suite maps by ID, so a shared
+  // id appears under each source and toggles together — flagged with a "⚠ N sources" badge.
+  const pool=SUITE_TESTS.filter(_testApplies).filter(artVisible);
+  const nSrc={}; pool.forEach(t=>{ (nSrc[t.id]=nSrc[t.id]||new Set()).add(t.agent||t.origin||"app"); });
+  const groups={}; pool.forEach(t=>{ const ag=(t.origin||"app").startsWith("agent");
+    const g=ag?("agent: "+(t.agent||t.origin)+(t.owner?" ("+t.owner+")":"")):("app · "+(t.source||"server")); (groups[g]=groups[g]||[]).push(t); });
+  const row=t=>{const n=(nSrc[t.id]||new Set()).size;
+    return `<label style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 10px;cursor:pointer"><input type="checkbox" ${has.has(t.id)?'checked':''} onchange="suiteToggleTest('${esc(rq.id)}','${esc(t.id)}')"> <span class="req">${esc(t.id)}</span> ${capPills(t)}${t.model?` <span class="muted">[${esc(t.model)}]</span>`:''}${t.disruptive?' <span class="badge danger">⚠</span>':''}${n>1?` <span class="badge warn" title="the same id is also under other sources — the suite maps by id, so these toggle together">⚠ ${n} sources</span>`:''}</label>`; };
+  let h=`<div class="row" style="justify-content:space-between;margin:0 0 6px;gap:12px"><div class="muted">Pick the tests that validate <b>${esc(rq.code)}</b>. ${SMAP.model?`(model <code>${esc(SMAP.model)}</code>)`:'(any model)'}</div>${artFilterControl(SUITE_TESTS,"renderMapTable()")}</div>`;
+  const gkeys=Object.keys(groups).sort((a,b)=>(a.startsWith("app")?-1:b.startsWith("app")?1:a.localeCompare(b)));
+  if(!gkeys.length){ return h+'<span class="muted">no tests available for this model / filter</span>'; }
+  gkeys.forEach(g=>{ const ag=!g.startsWith("app");
+    const seen=new Set(); const items=groups[g].filter(t=>{ if(seen.has(t.id))return false; seen.add(t.id); return true; });  // one row per id within a group
+    h+=`<div style="margin:7px 0 1px"><span class="pill ${ag?'origin-ag':'origin-up'}" style="font-size:10px">${esc(g)}</span></div>`+items.map(row).join("");
+  });
   return h;
 }
 function _suiteReq(id){ return SMAP.requirements.find(r=>r.id===id); }
@@ -1379,16 +1460,18 @@ function suiteAddReqsModal(){
   window._ARLIST=SUITE_REQS.filter(r=>!have.has(r.id));
   const h=`<h2>Add requirements</h2>`
     +`<div class="row" style="justify-content:space-between;align-items:center"><p class="muted" style="margin:0">Pick from any framework — they consolidate into the suite.</p>`
-    +`<label class="muted" style="margin:0">Order <select id="ar-sort" onchange="suiteArList()"><option value="code">by framework/code</option><option value="prio">by priority</option></select></label></div>`
+    +`<div class="row" style="margin:0;gap:12px">${artFilterControl(SUITE_REQS,"suiteArList()")}<label class="muted" style="margin:0">Order <select id="ar-sort" onchange="suiteArList()"><option value="code">by framework/code</option><option value="prio">by priority</option></select></label></div></div>`
     +`<div id="ar-list" style="max-height:52vh;overflow:auto"></div>`
     +`<div class="form-actions"><button class="act" onclick="suiteAddReqs()">Add selected</button><button class="btn-ghost" onclick="closeModal()">Cancel</button></div>`;
   openModal(h); suiteArList();
 }
 const _arPrio=r=>{ const n=parseInt(r.priority,10); return isNaN(n)?99:n; };
+function _artPill(r){ const ag=(r.origin||"").startsWith("agent");   // where a test/requirement comes from
+  return `<span class="pill ${ag?'origin-ag':'origin-up'}" style="font-size:10px">${ag?esc(r.agent||r.origin):'app'}${r.source?' · '+esc(r.source):''}${(ag&&r.owner)?' ('+esc(r.owner)+')':''}</span>`; }
 function _arRow(r,cls){ const p=parseInt(r.priority,10); const pb=isNaN(p)?"":` <span class="pill">P${p}</span>`;
-  return `<label style="display:block;padding:2px 0 2px 12px;cursor:pointer"><input type="checkbox" class="ar-req ${cls}" value="${esc(r.id)}"> <span class="req">${esc(r.code)}</span>${pb} <span class="muted">${esc(r.title||"")}</span></label>`; }
+  return `<label style="display:block;padding:2px 0 2px 12px;cursor:pointer"><input type="checkbox" class="ar-req ${cls}" value="${esc(r.id)}"> <span class="req">${esc(r.code)}</span>${pb} <span class="muted">${esc(r.title||"")}</span> ${_artPill(r)}</label>`; }
 function suiteArList(){
-  const sort=(document.getElementById("ar-sort")||{}).value||"code", list=window._ARLIST||[]; let h="";
+  const sort=(document.getElementById("ar-sort")||{}).value||"code", list=(window._ARLIST||[]).filter(artVisible); let h="";
   if(sort==="prio"){
     const byP={}; list.forEach(r=>{ const p=_arPrio(r); (byP[p]=byP[p]||[]).push(r); });
     Object.keys(byP).map(Number).sort((a,b)=>a-b).forEach(p=>{
@@ -1454,10 +1537,9 @@ async function delSuite(name){ if(!confirm("Delete suite "+name+"?"))return; awa
 const _DRIVERS=["console","craft","mgmt"], _ACTIONS=["power-cycle"];
 function _capBoxes(cls,opts){ return opts.map(x=>`<label style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;cursor:pointer"><input type="checkbox" class="${cls}" value="${x}"> ${x}</label>`).join(""); }
 async function newCheck(){
-  if(!await ensureAdmin()) return;
-  const ov=await fetchAgentCatalog(); const agents=ov.agents||[];
-  if(!agents.length){ openModal('<h2>New auto test</h2><p class="muted">No agent connected. A test is a Python file in a check-source repo the agent serves — connect an agent (Studio › Agents) first.</p>'); return; }
-  window._SC_SRC={}; agents.forEach(a=>window._SC_SRC[a.id]=[...new Set((a.checks||[]).map(c=>c.source).filter(Boolean))]);
+  const agents=await ownAgents();                    // only YOUR agents (app is already login-gated)
+  if(!agents.length){ openModal('<h2>New auto test</h2><p class="muted">You have no agent connected. A test is a Python file in a check-source repo <b>your</b> agent serves — connect your own agent (Studio › Agents) first.</p>'); return; }
+  window._SC_SRC={}; agents.forEach(a=>window._SC_SRC[a.id]=a.repos);   // repos the agent manages
   const agOpts=agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("");
   let h=`<h2>New auto test</h2><p class="muted">Scaffolds <code>atf_checks/&lt;model&gt;/&lt;driver&gt;/&lt;id&gt;.py</code> on the agent repo, exposing the SDK. Fill the TODOs after.</p>`;
   h+=`<div class="grid2"><div class="field"><label>Agent</label><select class="f" id="sc-agent" onchange="scSrcOpts()">${agOpts}</select></div>`
@@ -1472,7 +1554,7 @@ async function newCheck(){
   openModal(h); scSrcOpts();
 }
 function scSrcOpts(){ const a=$("#sc-agent")?.value, srcs=(window._SC_SRC||{})[a]||[]; const sel=$("#sc-src");
-  if(sel) sel.innerHTML=srcs.length?srcs.map(s=>`<option>${esc(s)}</option>`).join(""):'<option value="">(no repo — agent has no checks yet)</option>'; }
+  if(sel) sel.innerHTML=srcs.length?srcs.map(s=>`<option>${esc(s)}</option>`).join(""):'<option value="">(this agent manages no repo)</option>'; }
 async function saveCheck(){
   const aid=$("#sc-agent").value, id=($("#sc-id").value||"").trim(), source=$("#sc-src").value, msg=$("#cfg-msg");
   if(!id){ if(msg)msg.textContent="id required"; return; } if(!source){ if(msg)msg.textContent="pick a repo"; return; }
@@ -1572,7 +1654,6 @@ async function openInIDE(id){
 }
 // ---- view/edit an AGENT check's code (lives on the tester's machine; written back via the agent) ----
 async function editAgentCheckCode(aid,cid){
-  if(!await ensureAdmin()) return;
   const r=await adminFetch("/api/agents/"+encodeURIComponent(aid)+"/checks/"+encodeURIComponent(cid)+"/source");
   const d=await r.json().catch(()=>({}));
   if(!r.ok){ openModal(`<h2>Can't open ${esc(cid)}</h2><p class="muted">${esc(d.detail||("HTTP "+r.status))}</p>`); return; }
@@ -1585,7 +1666,6 @@ async function editAgentCheckCode(aid,cid){
   editorPage("Agent test · "+cid, body, "st-checks", extra); hlAttach("code-src");
 }
 async function saveAgentCheckCode(aid,cid){
-  if(!await ensureAdmin()) return;
   const msg=$("#code-msg"),errbox=$("#code-err"); if(msg) msg.textContent="saving…"; if(errbox) errbox.style.display="none";
   const r=await adminFetch("/api/agents/"+encodeURIComponent(aid)+"/checks/"+encodeURIComponent(cid)+"/source",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:$("#code-src").value})});
   const d=await r.json().catch(()=>({}));
@@ -1700,8 +1780,8 @@ async function openReport(runId){
         +benchBoards.map(b=>`<tr><td class="req">${esc(b.name)}</td><td>${esc(b.model||"—")}</td><td class="muted">${esc(b.serial||"—")}</td></tr>`).join("")+`</table>`;
     }
     if(sources.length){
-      h+=`<div class="sec-title">Check sources · versions as loaded ${hlp("The git revision of each check-source repo at run time — commit, and 'dirty' if it had uncommitted edits (e.g. an agent's working tree).")}</div><table><tr><th>Source</th><th>Version</th><th>Ref</th></tr>`
-        +sources.map(s=>`<tr><td class="req">${esc(s.name)}</td><td><code>${esc(s.commit||"—")}</code>${s.dirty?' <span class="badge danger">dirty</span>':''}</td><td class="muted">${esc(s.ref||"—")}</td></tr>`).join("")+`</table>`;
+      h+=`<div class="sec-title">Check sources · versions as loaded ${hlp("The git revision of each check-source repo at run time — commit, 'dirty' if it had uncommitted edits, and the agent/user that provided it.")}</div><table><tr><th>Source</th><th>Version</th><th>Ref</th><th>Agent</th></tr>`
+        +sources.map(s=>`<tr><td class="req">${esc(s.name)}</td><td><code>${esc(s.commit||"—")}</code>${s.dirty?' <span class="badge danger">dirty</span>':''}</td><td class="muted">${esc(s.ref||"—")}</td><td>${s.agent?`<span class="pill origin-ag">${esc(s.agent)}</span>${s.owner?` <span class="muted">(${esc(s.owner)})</span>`:''}`:'<span class="muted">—</span>'}</td></tr>`).join("")+`</table>`;
     }
     h+=`</div>`;
   }
@@ -2269,14 +2349,37 @@ function initTheme(){
   setTheme(t);
   $("#themebtn").onclick=()=>setTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
 }
+const ADMIN_TABS=["ad-models","ad-repos","ad-users","ad-backup"];   // the "Admin" menu group
+function applyNavRole(){
+  // Role model:
+  //  - Admin menu (Board models / Repositories / Users / Backup): only for is_admin users.
+  //  - The built-in 'admin' account is a PURE administrator: it sees ONLY the Admin menu + the
+  //    Agents page (to stop other users' agents) — nothing else.
+  //  - Every other logged-in user sees all non-admin features (scoped to their OWN agents); those
+  //    with the admin flag additionally get the Admin menu.
+  const rootAdmin = ADMIN_USER==="admin";
+  document.querySelectorAll("#nav button").forEach(b=>{
+    const t=b.dataset.t;
+    const show = ADMIN_TABS.includes(t) ? ADMIN_IS : (rootAdmin ? (t==="ad-agents"||t==="activity") : true);
+    b.style.display = show ? "" : "none";
+  });
+  document.querySelectorAll("#nav .nav-group").forEach(g=>{        // hide a label whose items are all hidden
+    let any=false;
+    for(let el=g.nextElementSibling; el && !el.classList.contains("nav-group"); el=el.nextElementSibling){
+      if(el.tagName==="BUTTON" && el.style.display!=="none"){ any=true; break; }
+    }
+    g.style.display = any ? "" : "none";
+  });
+}
 async function boot(){
   if(!await loginOk()){ showLogin(); return; }               // the whole app requires login
   const ov=document.getElementById("login-screen"); if(ov) ov.remove();
   const app=document.querySelector(".app"); if(app) app.style.display="";
   const _su=document.getElementById("side-user"); if(_su) _su.innerHTML=ADMIN_USER?("signed in · <strong>"+esc(ADMIN_USER)+"</strong>"):"";
   loadVersion();
+  applyNavRole();
   document.querySelectorAll("#nav button").forEach(b=>b.onclick=()=>render(b.dataset.t));
-  render("reports");
+  render(ADMIN_USER==="admin" ? "ad-users" : "reports");     // the admin account lands in its Admin area
 }
 async function loadVersion(){
   const el=document.getElementById("fw-ver"); if(!el) return;

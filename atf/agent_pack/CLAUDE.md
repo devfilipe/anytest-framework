@@ -8,8 +8,10 @@ developing the framework itself.
 ## The mental model
 
 - A **test** lives as a file in a check-source repo the agent serves, under
-  `atf_checks/<model>/<driver>/<id>.py` (automated) or `atf_checks/<model>/manual/<id>.md` (manual).
+  `atf_checks/<model>/<id>.py` (automated) or `atf_checks/<model>/manual/<id>.md` (manual).
   - `<model>` = `common` (any board) or a model slug (e.g. `router-x`) — runs only on that model.
+  - The file is **flat under its model** — the driver a test uses is declared in `@register`, NOT
+    encoded in the path (there is no per-driver subfolder).
 - A test **declares the framework capabilities it needs** — nothing more:
   - **drivers** (comm channels): an **alias** the bench wires to a driver instance. `console`,
     `craft`, `mgmt` are the conventional aliases (plus the implicit `host`). The driver's **type**

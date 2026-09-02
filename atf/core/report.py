@@ -142,10 +142,11 @@ def _bench_preamble(meta: dict, boards: list[str]) -> list[str]:
     srcs = meta.get("sources") or []
     if srcs:
         lines += ["**Check sources — versions as loaded:**", "",
-                  "| Source | Version | Ref |", "|---|---|---|"]
+                  "| Source | Version | Ref | Agent |", "|---|---|---|---|"]
         for s in srcs:
             v = (s.get("commit") or "—") + (" · dirty" if s.get("dirty") else "")
-            lines.append(f"| {s['name']} | {v} | {s.get('ref', '') or '—'} |")
+            ag = (s.get("agent") or "—") + (f" ({s['owner']})" if s.get("owner") else "")
+            lines.append(f"| {s['name']} | {v} | {s.get('ref', '') or '—'} | {ag} |")
         lines.append("")
     return lines
 
@@ -336,10 +337,11 @@ def render_md(ctx: dict) -> str:
         L += [f"| {b['name']} | {b.get('model') or '—'} | {b.get('serial') or '—'} |" for b in ctx["bench_boards"]]
         L.append("")
     if ctx["sources"]:
-        L += ["## Check sources — versions as loaded", "", "| Source | Version | Ref |", "|---|---|---|"]
+        L += ["## Check sources — versions as loaded", "", "| Source | Version | Ref | Agent |", "|---|---|---|---|"]
         for s in ctx["sources"]:
+            ag = (s.get("agent") or "—") + (f" ({s['owner']})" if s.get("owner") else "")
             L.append(f"| {s['name']} | {(s.get('commit') or '—')}{' · dirty' if s.get('dirty') else ''} "
-                     f"| {s.get('ref') or '—'} |")
+                     f"| {s.get('ref') or '—'} | {ag} |")
         L.append("")
     L.append("## Requirements")
     if ctx["mapped"]:
@@ -471,11 +473,14 @@ def render_html(ctx: dict) -> str:
                      f"<td>{_h(b.get('serial') or '—')}</td></tr>")
         P.append("</table>")
     if ctx["sources"]:
-        P.append("<h2>Check sources · versions as loaded</h2><table><tr><th>Source</th><th>Version</th><th>Ref</th></tr>")
+        P.append("<h2>Check sources · versions as loaded</h2><table>"
+                 "<tr><th>Source</th><th>Version</th><th>Ref</th><th>Agent</th></tr>")
         for s in ctx["sources"]:
             dirty = ' <span class="badge b-gap">dirty</span>' if s.get("dirty") else ""
+            agent = (_h(s.get("agent")) + (f' <span class="sub">({_h(s["owner"])})</span>' if s.get("owner") else "")
+                     ) if s.get("agent") else "—"
             P.append(f"<tr><td>{_h(s['name'])}</td><td><code>{_h(s.get('commit') or '—')}</code>{dirty}</td>"
-                     f"<td>{_h(s.get('ref') or '—')}</td></tr>")
+                     f"<td>{_h(s.get('ref') or '—')}</td><td>{agent}</td></tr>")
         P.append("</table>")
 
     P.append("<h2>Requirements</h2>")

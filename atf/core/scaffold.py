@@ -1,6 +1,7 @@
-"""Scaffold a new auto test: write `atf_checks/<model>/<driver>/<slug>.py` from a template that
-exposes the atf SDK (ctx drivers + actions). Backs `atf new-check` / the web scaffold — authoring
-a test is "fill the TODOs". No central import list: `atf_checks` discovers modules by walking the
+"""Scaffold a new auto test: write `atf_checks/<model>/<slug>.py` from a template that exposes the
+atf SDK (ctx drivers + actions). Backs `atf new-check` / the web scaffold — authoring a test is
+"fill the TODOs". The file is flat under its model (the driver it uses is declared in `@register`,
+not encoded in the path). No central import list: `atf_checks` discovers modules by walking the
 package. (Manual tests are Markdown `.md` artifacts, scaffolded separately.)"""
 from __future__ import annotations
 
@@ -90,14 +91,15 @@ def render_check(*, id: str, drivers: list[str] | None = None, actions: list[str
 def new_check(*, id: str, driver: str = "host", actions: list[str] | None = None,
               severity: str = "medium", title: str = "", model: str = "common",
               checks_root: str = "atf_checks") -> Path:
-    """Create the auto-test module at `atf_checks/<model>/<driver>/<slug>.py` locally. Returns the
-    new file path. Raises on a bad driver/severity/model or an existing file."""
-    slug, ddir, text = render_check(id=id, drivers=[driver], actions=actions, severity=severity, title=title)
+    """Create the auto-test module at `atf_checks/<model>/<slug>.py` locally (flat under the model —
+    the driver is declared in `@register`, not the path). Returns the new file path. Raises on a bad
+    driver/severity/model or an existing file."""
+    slug, _ddir, text = render_check(id=id, drivers=[driver], actions=actions, severity=severity, title=title)
     mdl = _slug(model) if model else "common"
     root = Path(checks_root)
-    pkg = root / mdl / ddir
+    pkg = root / mdl
     pkg.mkdir(parents=True, exist_ok=True)
-    for p in (root, root / mdl, pkg):               # ensure every level is a package
+    for p in (root, pkg):                           # ensure every level is a package
         (p / "__init__.py").touch(exist_ok=True)
     dest = pkg / f"{slug}.py"
     if dest.exists():

@@ -373,6 +373,12 @@ def run(server: str, token: str, sources: list[str], name: str) -> int:
     while True:
         try:
             if aid is None:
+                # Re-scan on every (re)register so the catalog reflects the CURRENT files — a server
+                # restart must not re-register with the stale startup catalog, or tests created during
+                # the session would be wrongly flagged 'stale' (their file isn't in the app snapshot).
+                src_info = [_source_info(p) for p in paths]
+                reg["sources"], reg["catalog"], reg["req_files"] = (
+                    src_info, _catalog(paths), _requirement_files(paths))
                 aid = _post(f"{server}/api/agents/register", reg)["id"]
                 dirty = ", ".join(f"{s['name']}{'*' if s['dirty'] else ''}" for s in src_info)
                 print(f"registered as {aid}  ·  sources: {dirty}  ·  polling {server}")

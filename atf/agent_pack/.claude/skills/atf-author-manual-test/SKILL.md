@@ -9,15 +9,16 @@ A manual test is a Markdown artifact under `atf_checks/<model>/manual/<id>.md` �
 the steps an operator runs. It is run as `mode=manual` (an operator captures the verdict); in a
 headless run it is reported `manual`/skipped.
 
-1. **Scaffold** it on the agent repo:
-   ```bash
-   curl -s -X POST "$ATF_SERVER/api/agents/$AID/manual" \
-     -H "authorization: Bearer $ATF_TOKEN" -H 'content-type: application/json' \
-     -d '{"id":"manual-uart-photo","source":"<repo>","model":"router-x","drivers":[],"actions":[],
-          "severity":"high","title":"Debug interface photo"}'
+1. **Scaffold** it on the agent repo — **prefer the `atf_scaffold` MCP tool** with `kind="manual"`
+   (reads server + token from the environment; never hardcode credentials):
    ```
+   atf_scaffold(kind="manual", id="manual-uart-photo", source="<repo>", model="router-x",
+                drivers=[], actions=[], severity="high", title="Debug interface photo")
+   ```
+   It writes `atf_checks/<model>/manual/<id>.md` and refuses (409) if that id already exists.
    Drivers/actions are usually empty (operator-driven ⇒ always available); add them only to gate
    the run on a channel (e.g. `["power-cycle"]` if the procedure needs a bench power-cycle).
+   Raw-API fallback (debug only): `POST $ATF_SERVER/api/agents/$AID/manual` with the same fields.
 2. **Write the steps** in Markdown, black-box, with a clear verdict. Structure:
    `## Objetivo` · `## Pré-condições` · `## Passos` (numbered) · `## Observações` (checklist `- [ ]`)
    · `## Veredito` (when is it **pass**, when **gap**). Include known gaps to look for.
