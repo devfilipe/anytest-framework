@@ -12,14 +12,16 @@ Tested on Ubuntu; adjust `python3-venv` install for your distro.
 ```bash
 sudo git clone https://github.com/devfilipe/anytest-framework /opt/anytest-framework
 cd /opt/anytest-framework
-sudo apt-get install -y python3-venv nmap      # Debian/Ubuntu; venv bootstraps pip, nmap = mgmt scans
+sudo apt-get install -y python3-venv nmap iputils-ping   # venv bootstraps pip; nmap = mgmt scans, ping = reachability
 sudo python3 -m venv .venv
 sudo .venv/bin/pip install -e ".[host,web]"
 ```
 
 **`nmap` is a runtime dependency** of the MGMT checks (port scans, `ssl-enum-ciphers` NSE). Without
 it the `local` mgmt backend fails at dispatch (`driver dispatch failed`). See *MGMT check backends*
-below for the `docker` alternative.
+below for the `docker` alternative. `ping` (iputils) is the ICMP probe behind `ctx.<alias>.ping()`
+and the inventory reachability button; with neither `ping` nor `nmap` on the vantage a check errors
+out saying so, rather than reporting a live board as down.
 
 ## 2. Dedicated user + writable data dir
 

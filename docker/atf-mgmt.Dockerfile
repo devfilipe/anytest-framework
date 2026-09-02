@@ -2,9 +2,10 @@
 #   docker build -f docker/atf-mgmt.Dockerfile -t atf-mgmt:latest .
 FROM python:3.12-slim
 
-# OS toolchain (nmap for scans; sslyze/testssl land with E.3).
+# OS toolchain (nmap for scans; iputils-ping so a reachability check can actually send ICMP —
+# without it ctx.<alias>.ping() has no probe and a live board reads as down; sslyze/testssl land with E.3).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nmap ca-certificates \
+    && apt-get install -y --no-install-recommends nmap iputils-ping ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -14,6 +14,7 @@ import socket
 import subprocess
 
 from atf.access.channels.base import Channel, CmdResult
+from atf.access.host import icmp_ping
 
 DEFAULT_PORTS = (22, 80, 443, 830, 4565, 6379, 8080)
 DEFAULT_NMAP_PORTS = "1-1024,4565,6379,8080"
@@ -51,11 +52,7 @@ class IpChannel(Channel):
         target = target or self.ip
         if self.ac is not None:
             return self.ac.ping(target)
-        try:
-            return subprocess.run(["ping", "-c", "1", "-W", "2", target],
-                                  capture_output=True).returncode == 0
-        except FileNotFoundError:
-            return False
+        return icmp_ping(target)          # host/container vantage — raises if it has no probe tool
 
     def tcp(self, host: str | None = None, port: int = 0) -> bool:
         host = host or self.ip
