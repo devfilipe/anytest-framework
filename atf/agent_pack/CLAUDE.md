@@ -126,6 +126,20 @@ repos (`ATF_SOURCES` — both `atf_checks/` and `requirements/`), the AI pack, o
 PostToolUse hook byte-compiles a new `.py` under `atf_checks/` and flags syntax errors so you fix
 them before they break discovery.
 
+> **Threat model — read this.** The write-guard only intercepts the **Write/Edit** tools; it is NOT
+> a sandbox.
+> - **Unrestricted mode** (`--dangerously-skip-permissions`, the default when you Connect AI): the
+>   Wizard also has **Bash**, which can write anywhere (`echo > ~/x`, `tee`, `python -c`, `sed -i`…)
+>   *around* the guard. Here the guard is **advisory** — it stops accidental out-of-scope Write/Edit,
+>   not a determined write via shell. Do not rely on it as a security boundary.
+> - **Restricted mode** (uncheck "Unrestricted"): the Wizard runs with `--permission-mode acceptEdits`
+>   and no Bash — the only write path is Write/Edit, which the guard filters, and the atf MCP tools
+>   write nothing to local disk (they call the server API). So in restricted mode the guard is
+>   **enforced**: the Wizard can only write inside your repos. Prefer this for hands-off editing.
+> - **Hard isolation, any mode:** confine the agent process at the OS level — a dedicated user with
+>   only the repos writable (home/`/etc`/framework read-only), or a container. That is the only
+>   boundary that holds against Bash.
+
 Authoring/editing files is done directly in the repos under `ATF_SOURCES` (Claude Code edits them).
 Never hardcode credentials; the MCP server reads them from `.atf-ai.env` / the environment. If the
 server was restarted, `ATF_TOKEN` may have expired — turn AI off/on again to refresh it.

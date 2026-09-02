@@ -5,7 +5,11 @@ framework, another repo) is blocked (exit 2) — the Wizard's job is authoring t
 the tester's own repos, not touching the rest of the machine.
 
 Allowed roots cover the WHOLE repo tree (so both atf_checks/ and requirements/ are fine). Reads the
-tool's file_path from the hook JSON on stdin; stdlib only."""
+tool's file_path from the hook JSON on stdin; stdlib only.
+
+NOTE (threat model): this only intercepts Write/Edit. In UNRESTRICTED mode the Wizard also has Bash,
+which can write around this hook — so here it is ADVISORY, not a boundary. It is ENFORCED only in
+restricted mode (no Bash). For a real boundary, confine the agent at the OS level. See CLAUDE.md."""
 import json
 import os
 import sys
