@@ -1743,12 +1743,20 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             raise HTTPException(403, "not your agent — only its owner can operate it")
         return s
 
+    def _no_agent_account(me):
+        # the built-in 'admin' account is a pure administrator — it manages/disconnects agents but
+        # never runs one, so it is never issued an enrollment token.
+        if me["username"] == "admin":
+            raise HTTPException(403, "the built-in 'admin' account doesn't run an agent")
+
     @app.get("/api/agents/token")                       # YOUR enrollment token (private to you)
     def agent_token_get(me=Depends(require_login)):
+        _no_agent_account(me)
         return {"token": repo.user_agent_token(me["username"])}
 
     @app.post("/api/agents/token")                      # rotate YOUR token
     def agent_token_rotate(me=Depends(require_login)):
+        _no_agent_account(me)
         return {"token": repo.rotate_user_agent_token(me["username"])}
 
     @app.get("/agent.py")                               # zero-install: tester curls + runs this
@@ -1763,6 +1771,8 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         owner = repo.user_of_agent_token(body.get("token", ""))
         if not owner:
             raise HTTPException(401, "bad agent token")
+        if owner == "admin":                            # the admin account never runs an agent
+            raise HTTPException(403, "the built-in 'admin' account can't run an agent")
         # One agent per user token: a new connection RETIRES any existing one for this owner — the
         # old process is asked to stop and its session (with its overlay) is dropped, so the newest
         # connection wins and stale/duplicate sessions never linger.

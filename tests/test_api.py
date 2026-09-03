@@ -282,3 +282,17 @@ def test_scaffold_writes_flat_under_model(tmp_path):
     assert p == root / "common" / "vlima_ping_mgmt.py" and p.is_file()
     p2 = scaffold.new_check(id="tls-legacy", driver="mgmt", model="tmd400g", checks_root=str(root))
     assert p2 == root / "tmd400g" / "tls_legacy.py"
+
+
+def test_admin_account_gets_no_agent_token(client, store):
+    """The built-in 'admin' account is never issued an enrollment token and can't run an agent —
+    even with its existing DB token, registration is refused. Regular users are unaffected."""
+    assert client.get("/api/agents/token").status_code == 403          # admin fixture
+    assert client.post("/api/agents/token").status_code == 403
+    client.post("/api/users", json={"username": "erin", "password": "pw", "is_admin": False})
+    erin = client.__class__(client.app)
+    erin.headers.update({"Authorization": "Bearer " + _login(client, "erin", "pw")})
+    assert erin.get("/api/agents/token").status_code == 200            # a regular user still gets one
+    atok = store.user_agent_token("admin")                             # admin's real token
+    r = client.__class__(client.app).post("/api/agents/register", json={"name": "a", "token": atok})
+    assert r.status_code == 403                                        # register refused for the admin account
