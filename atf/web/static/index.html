@@ -1945,18 +1945,22 @@ A **Test Plan** = a Suite + a bench/board (what + where), and is what you actual
 
 ### Tests are files
 
-Discovered from **check-source repos**, versioned in git:
+Discovered from **check-source repos**, versioned in git — **flat under the model** (the driver a
+test uses is declared in \`@register\`, not encoded in the path):
 
 \`\`\`
 atf_checks/
-  common/<driver>/<id>.py     # any board
-  <model>/<driver>/<id>.py    # automated, only that model (e.g. router-x)
-  <model>/manual/<id>.md      # manual — a Markdown artifact (operator steps + verdict)
+  common/<id>.py                 # automated, any board
+  <model>/<id>.py                # automated, only that model (e.g. router-x)
+  <model>/manual/<id>.md         # manual — a Markdown artifact (operator steps + verdict)
+requirements/<framework>.yaml    # a requirement catalog (the left side of a Suite's map)
 \`\`\`
 
-\`common\` runs on any board; a \`<model>\` slug runs only on boards of that model. Config lives in a
-**SQLite store** (benches, suites, requirements, encrypted secrets); **reports are per-user**
-(private/public, exportable).
+Discovery imports **every** module under \`atf_checks\` (recursively), so the layout above is a
+convention, not a constraint. \`common\` runs on any board; a \`<model>\` slug runs only on boards of that
+model. Config lives in a **SQLite store** (benches, suites, requirements, encrypted secrets);
+**reports are per-user** (private/public, exportable) and record their **provenance** — who ran it,
+when, which agent/AI was connected, and the framework + source revisions.
 
 ### How a run flows
 
@@ -1966,7 +1970,12 @@ atf_checks/
 3. **Execute in the suite's order** (consecutive \`mgmt\` checks batch to the atf-mgmt container;
    host/console/craft run in-process), each against its \`ctx\`.
 4. Collect **records** (verdict, drivers/actions, evidence) → roll up to the **requirement × board**
-   compliance matrix in the report.`;
+   compliance matrix in the report.
+
+**Where the checks come from.** If the server has no matching checks of its own (its check-sources
+don't provide them), the run **routes to the user's own connected agent** — the agent's working tree
+is executed in an isolated \`atf _agent-worker\` subprocess (see *The agent*). A run only ever uses the
+running user's **own** agent, never another user's.`;
 const _DOC_AGENT=`## The agent
 
 The **dev/host agent** (Mode A) runs on **your** machine and connects **outbound** to the server.
