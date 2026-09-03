@@ -124,13 +124,18 @@ def main(argv=None) -> int:
         else:
             specs = select(ids=sel.get("ids"), requirements=sel.get("req"), drivers=sel.get("vectors"))
         name = req.get("bench") or ""
-        try:
-            from atf.store import open_repo
-            repo = open_repo()
-            bench = repo.inventory_bench(name) if name and repo.get_bench(name) else \
-                inventory.load(req.get("bench_path", "benches/lab.yaml"))
-        except Exception:
-            bench = inventory.load(req.get("bench_path", "benches/lab.yaml"))
+        if req.get("bench_data") is not None:
+            # the server pre-resolved the bench (creds already decrypted) so this subprocess needs no
+            # APP_SECRET — build straight from it, don't touch the encrypted store
+            bench = inventory.parse(req["bench_data"], req.get("bench_secrets") or {})
+        else:
+            try:
+                from atf.store import open_repo
+                repo = open_repo()
+                bench = repo.inventory_bench(name) if name and repo.get_bench(name) else \
+                    inventory.load(req.get("bench_path", "benches/lab.yaml"))
+            except Exception:
+                bench = inventory.load(req.get("bench_path", "benches/lab.yaml"))
         _b = req.get("board")
         boards = (set(_b) if isinstance(_b, list) else {_b}) if _b else None
         recs = runner.run(bench, specs, Path(req["out"]), boards_filter=boards,

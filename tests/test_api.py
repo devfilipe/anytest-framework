@@ -296,3 +296,16 @@ def test_admin_account_gets_no_agent_token(client, store):
     atok = store.user_agent_token("admin")                             # admin's real token
     r = client.__class__(client.app).post("/api/agents/register", json={"name": "a", "token": atok})
     assert r.status_code == 403                                        # register refused for the admin account
+
+
+def test_inventory_parse_resolves_creds_from_provided_secrets():
+    """The server hands the agent-worker the bench dict + already-decrypted secrets, so the worker
+    builds plaintext creds WITHOUT APP_SECRET — this is what makes stripping APP_SECRET safe."""
+    from atf.core import inventory
+    data = {"boards": [{"name": "b1", "model": "m",
+                        "creds": {"root": {"user": "root", "password_ref": "rootpw"}},
+                        "drivers": {"mgmt": {"driver_name": "ip", "ip": "127.0.0.1"}}}]}
+    bench = inventory.parse(data, {"rootpw": "s3cret"})
+    assert bench.boards[0].creds["root"].password == "s3cret"
+    # and with no secret provided, it degrades to "" (never crashes) — cred checks just fail at auth
+    assert inventory.parse(data, {}).boards[0].creds["root"].password == ""

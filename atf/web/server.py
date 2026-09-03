@@ -628,7 +628,22 @@ def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend
     out = Path(tempfile.mkdtemp(prefix="atf-agent-run-", dir=work_root()))
     req = {"bench": bench_stem, "board": board, "out": str(out),
            "select": select, "mgmt_backend": mgmt_backend}
+    # The agent's UNTRUSTED check code runs in this subprocess. Resolve the bench HERE (the server has
+    # APP_SECRET) and hand the worker the bench dict + its creds already decrypted, so the worker
+    # never needs APP_SECRET — then strip it from the subprocess env. A malicious check can still read
+    # the creds for THIS bench (it needs them to authenticate) but not the master key that decrypts
+    # every stored secret.
+    try:
+        from atf.store import open_repo
+        _repo = open_repo()
+        if bench_stem and _repo.get_bench(bench_stem) is not None:
+            req["bench_data"] = _repo.get_bench(bench_stem)
+            req["bench_secrets"] = {**_repo.secrets("__inventory__", reveal=True),
+                                    **_repo.secrets(bench_stem, reveal=True)}
+    except Exception:
+        pass
     env = {**os.environ, "ATF_CHECK_SOURCES": os.pathsep.join(srcs)}
+    env.pop("APP_SECRET", None)                         # never expose the master secret to check code
     try:
         p = sp.run([sys.executable, "-m", "atf.cli", "_agent-worker"],
                    input=json.dumps(req), env=env, capture_output=True, text=True, timeout=timeout)
