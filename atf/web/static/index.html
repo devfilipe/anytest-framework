@@ -1999,8 +1999,11 @@ secret, and trees/results are your source).
 ### The enrollment token
 
 Each user has a **private enrollment token** (Studio › Agents → *Your enrollment token*). An agent
-that registers with it is **owned by that user**, and only the owner (or an admin) can browse it, run
-against it, scaffold, or connect AI. Properties:
+that registers with it is **owned by that user**, and **only the owner** can browse it, run against
+it, scaffold, or connect/run its AI — **not even an admin drives another user's agent**. Admins may
+**list** every connected agent and **disconnect** any of them (from *Activity*); the built-in
+\`admin\` account is administration-only and is **never issued a token** (it doesn't run an agent).
+One token binds to **one live agent** — a new connection retires the previous one. Properties:
 
 - **Private** — it is never shown to other users; treat it like a password.
 - **Ownership** — it binds every agent it registers to you; it is *not* a login (the web UI still needs
@@ -2044,11 +2047,18 @@ A small bundle the agent installs into your environment:
 
 A **skill** is a named, self-contained instruction set (a \`SKILL.md\` with a description) that Claude
 Code **auto-invokes when the task matches** — so the model follows a vetted procedure instead of
-improvising. The pack ships three:
+improvising. The pack ships:
 - **\`atf-author-driver-test\`** — scaffold + implement an automated \`.py\` test (black-box, declares
   drivers/actions).
 - **\`atf-author-manual-test\`** — author a manual \`.md\` artifact (operator steps + verdict).
+- **\`atf-author-requirement\`** — author a requirement catalog (\`requirements/<framework>.yaml\`).
+- **\`atf-map-suite\`** — assemble/validate a Suite's requirement→test map (ordered).
+- **\`atf-debug-check\`** — the authoring loop: edit → run one id (local backend) → read evidence → iterate.
 - **\`atf-run\`** — run a suite / ad-hoc ids and interpret the report (verdicts, skip reasons, roll-up).
+- **\`atf-triage-report\`** — interpret a report: findings vs skips vs errors, per-requirement roll-up.
+
+It also ships a **subagent**, \`atf-triage\` (read-only), that the Wizard can delegate a run's triage
+to (give it a \`run_id\`), and **guardrail hooks** — see *Using the system securely* below.
 
 ### MCP — Model Context Protocol
 
@@ -2063,9 +2073,15 @@ tools:
 |---|---|
 | \`atf_catalog\` | List every known test (id, drivers, actions, mode, model). |
 | \`atf_suites\` | List saved suites (the requirement→test maps). |
+| \`atf_requirements\` | List requirement catalogs, or one framework's requirements. |
 | \`atf_scaffold\` | Create a test file on your repo (\`kind: auto\`→\`.py\`, \`manual\`→\`.md\`). |
+| \`atf_map\` | Save a Suite's requirement→test map (ordered) and validate it. |
+| \`atf_benches\` | List benches (or a bench's boards) to pick where to run. |
+| \`atf_testplan\` | List/get/save/run a Test Plan (a named Suite + bench/board). |
 | \`atf_run\` | Run a suite or ad-hoc ids against a bench/board. |
 | \`atf_report\` | Fetch a run's report — records + requirement×board roll-up. |
+| \`atf_evidence\` | Fetch the raw evidence a check wrote (what the probe saw) — for triage/debug. |
+| \`atf_api\` | Any REST endpoint the curated tools don't cover (your token's permissions apply). |
 
 Authoring/editing the actual files is done **directly in the repos** under \`ATF_SOURCES\` (Claude edits
 them); the MCP tools cover catalog/scaffold/run/report.
@@ -2127,12 +2143,67 @@ Claude Code auto-loads everything in that folder:
 This is the **same environment** the Wizard uses — e.g. \`cd ~/atf-ai && claude "list the mgmt tests and
 draft one for exposed Telnet"\`, editing the files it creates directly in your repos. If the server was
 restarted, \`ATF_TOKEN\` may have expired — re-run **Connect AI** to refresh it.`;
+const _DOC_SECURITY=`## Using the system securely
+
+atf is designed for **authorized** testing — black-box security, compliance and functional checks
+run by people you trust, against equipment you're allowed to test. This chapter is the operator's
+guide to running it safely; it is about **good practice and trust boundaries**, not attack technique.
+
+### Accounts & least privilege
+- Two roles: **regular users** (author/run tests, manage **their own** agents) and **admins** (the
+  Admin menu — users, repositories, board models, backup — plus listing and **disconnecting** agents).
+- Grant the **admin flag** sparingly. The built-in \`admin\` account is **administration-only**: it does
+  not author or run tests, is never issued an agent token, and **cannot be deleted or demoted**.
+- **Agents are owner-only.** Only an agent's owner can browse it, run against it, scaffold on it, or
+  drive its AI — an admin can list and disconnect, but never operate, another user's agent. A user's
+  run only ever executes on **their own** agent.
+
+### Secrets at rest
+- Credentials (\`password_ref\`) are stored **encrypted** (Fernet/AES) under a key derived from
+  **\`APP_SECRET\`**; values are never shown, logged, or exported in plaintext (the UI masks them).
+- Set a **strong, stable \`APP_SECRET\`** (32+ chars) and keep it **out of version control**. It is the
+  key to every stored secret: **back it up** (losing it loses all secrets) and **don't change it**
+  casually (that orphans existing secrets). Treat the config store as sensitive.
+
+### Tokens & transport
+- The **enrollment token** is a bearer secret — private to each user, never shown to others. Treat it
+  like a password; **rotate** it if it leaks (connected agents keep working; new ones need the new one).
+- Put the server behind **HTTPS/TLS** in production: tokens, working trees and results cross the wire.
+- Restrict **who can reach the server** (VPN / network allowlist), and scope the network the mgmt
+  runner uses to reach boards to the intended management/DCN segment.
+
+### Running test code you trust
+- To execute a test, the server runs the **check code from a connected agent's repos**. That is
+  ordinary code execution — so **only connect agents and check-sources you trust** (they're your own
+  developers' working trees by design). The platform's master secret is **withheld** from that
+  execution.
+- If you must let **mutually-untrusted** users share one server, **isolate the run worker** at the OS
+  level — a dedicated low-privilege user or a container with access limited to the run's own files,
+  and restricted network egress. This is a deployment control, not a UI setting.
+
+### The AI assistant (Wizard)
+- The Wizard runs **Claude Code on your own machine**, with **your** session token and **your** repos —
+  never on the server, and never able to drive another user's agent.
+- **Choose the permission mode deliberately.** *Restricted* limits it to the atf tools + file edits
+  (**no shell**); a guardrail hook then confines edits to your check-source repos, and it is
+  **enforced**. *Unrestricted* also gives it a **shell** (powerful on your machine) — there the guard
+  is **advisory only**, so use it when you trust the flow, and prefer restricted for hands-off editing.
+- For a hard boundary regardless of mode, run the agent under **OS-level confinement** (dedicated
+  user / container). And since the Wizard edits **real files**, keep your repos under **git** and
+  review its changes before committing.
+
+### Operational hygiene
+- Keep the server patched and backed up (Admin › Backup). Disconnect stale agents (they clear their
+  overlay). Reset passwords / rotate tokens on personnel changes. Prefer restricted AI mode for
+  unattended use. The black-box rule keeps checks probing from the outside — never logging into a
+  device to read its config as a measurement shortcut.`;
 function _docSection(title,body,open){ return `<details ${open?'open':''} style="margin-bottom:10px"><summary style="cursor:pointer;padding:11px 14px;background:var(--raised);border-radius:var(--radius);font-weight:600;font-size:14px">${title}</summary><div class="md" style="padding:12px 18px 4px;max-width:860px">${md(body)}</div></details>`; }
 function renderDocs(m){
   m.innerHTML=`<div class="panel"><div class="sec-title">Documentation</div>`
     +_docSection("1 · Architectural principles",_DOC_PRINCIPLES,true)
     +_docSection("2 · The agent",_DOC_AGENT,false)
     +_docSection("3 · AI support (Claude Code)",_DOC_AI,false)
+    +_docSection("4 · Using the system securely",_DOC_SECURITY,false)
     +`</div>`;
 }
 
