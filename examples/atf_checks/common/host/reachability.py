@@ -5,9 +5,9 @@ The simplest possible test — no channel, no container. It validates the whole 
 own checks. A test declares only the framework capabilities it needs; `host-recon` needs
 none (it probes from the host that runs the framework), so it is always available.
 
-Drop your real checks in their own repo under `atf_checks/<model>/<driver>/<id>.py` and
-point `ATF_CHECK_SOURCES` at it. `common` = runs on any board; a `<model>` slug = only on
-boards of that model.
+Drop your real checks in their own repo under `atf_checks/<model>/<id>.py` (flat under the model —
+the driver a test uses is declared in `@register`, not the path) and point `ATF_CHECK_SOURCES` at
+it. `common` = runs on any board; a `<model>` slug = only on boards of that model.
 """
 from __future__ import annotations
 
