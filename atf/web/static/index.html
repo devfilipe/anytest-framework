@@ -1930,6 +1930,32 @@ The **bench** provides the drivers/actions (which agent, which command per signa
 **skips** a test whose declared driver/action the bench lacks — with a precise reason — instead of
 failing it. **Capabilities belong to the bench, not the test.**
 
+### ctx methods — what runs, and where
+
+A driver is only an **interface**; each method is really a command that runs on some **node** (the
+host, a container, or an **agent** on a machine near the board). That node must actually **provide
+the capability** — a container needs the \`ping\`/\`nmap\` binaries, a serial driver needs an agent
+that owns that TTY, a power-cycle action needs an agent that can toggle the switch. If the backing
+capability isn't there, the check is **skipped**, not failed.
+
+| \`ctx\` call | What it does | Command under the hood | Runs on | The node must provide |
+|---|---|---|---|---|
+| \`ctx.host.ping(ip)\` | ICMP reachability | \`ping -c1 -W2\` | in-process (runner / \`_agent-worker\`; **inside the mgmt container** for a mgmt check) | a \`ping\` binary + ICMP permission |
+| \`ctx.host.tcp(ip,port)\` | TCP reachability | \`socket.connect\` | same as above | outbound TCP to the target |
+| \`ctx.mgmt.ping / .tcp\` | reachability, mgmt vantage | \`ping\` / \`socket.connect\` | **atf-mgmt container** (or host, \`--mgmt-backend local\`) | ping / TCP egress |
+| \`ctx.mgmt.scan(ports)\` | TCP port scan | \`nmap -Pn -sT --open …\` | container / host | \`nmap\` |
+| \`ctx.mgmt.nse(scripts)\` | scripted probe (e.g. TLS enum) | \`nmap --script ssl-enum-ciphers …\` | container / host | \`nmap\` + the NSE scripts |
+| \`ctx.mgmt.sh(cmd)\` | board shell (adversarial only) | SSH (paramiko) with bench creds | container / host | \`paramiko\` + reachable SSH + creds |
+| \`ctx.craft.*\` (ip **with** an agent) | same methods, from the agent's L2 vantage | delegated to the agent (\`AgentConn.ping / tcp_scan\`) | **the agent's machine** | an agent reachable on the board's segment |
+| \`ctx.console.send / expect / login / sh\` | serial console I/O | send/expect over the agent's serial stream | **the agent's machine** | an agent with that serial \`device\`/\`baud\` wired |
+| \`ctx.actions.power_cycle(sig)\` | node action (side effect) | the bench's signal command, over SSH | **the action's agent** | an agent that can emit the signal (e.g. a PDU) |
+| \`ctx.write_evidence(text)\` | persist raw evidence | file write into the run's out dir | wherever the check runs | — |
+
+The same method (say \`.ping\`) can therefore execute in **three different places** depending on the
+driver: on the host/container (ip **without** an agent = *mgmt* vantage), or on an agent's machine
+(ip **with** an agent = *craft* vantage). "mgmt" and "craft" are just conventional **aliases** for the
+same \`ip\` driver — what decides the vantage is **the driver's type + whether it names an agent**.
+
 ### The Suite is the requirement↔test map
 
 Tests are **decoupled from requirements**. A **Suite** is the map: it links requirements to tests
