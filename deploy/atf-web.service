@@ -1,0 +1,31 @@
+[Unit]
+Description=Anytest Framework (atf) web dashboard + API
+Documentation=https://github.com/devfilipe/anytest-framework
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atf
+Group=atf
+WorkingDirectory=/opt/anytest-framework
+EnvironmentFile=/etc/atf/atf.env
+# Scratch dir for uploaded agent trees + run outputs. Must be a host-visible path (NOT /tmp) so the
+# mgmt --mgmt-backend docker bind mounts are visible to the docker daemon despite PrivateTmp below.
+Environment=ATF_WORK=/var/lib/atf/work
+ExecStart=/opt/anytest-framework/.venv/bin/atf web --host 0.0.0.0 --port 8899 --out /var/lib/atf/reports
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/atf
+PrivateTmp=true
+# The inventory reachability probe shells out to ping (ICMP). Under NoNewPrivileges the ping
+# binary's file capability is ignored, so grant CAP_NET_RAW as an ambient capability instead
+# (works without relaxing NoNewPrivileges). Needed only when ping_group_range excludes the
+# service group; harmless otherwise.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

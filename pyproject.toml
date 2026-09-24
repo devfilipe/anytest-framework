@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anytest-framework"
+version = "0.1.0"
+description = "An extensible test framework for network elements and embedded devices"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "devfilipe" }]
+keywords = ["testing", "security", "compliance", "network-elements", "embedded", "pentest"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "pyyaml>=6",
+]
+
+[project.urls]
+Homepage = "https://github.com/devfilipe/anytest-framework"
+Repository = "https://github.com/devfilipe/anytest-framework"
+
+# Extras pulled in by later slices, not needed for the core skeleton:
+[project.optional-dependencies]
+host = ["paramiko>=3", "pyserial>=3.5", "pexpect>=4", "rich>=13"]   # console/craft channels
+mgmt  = ["paramiko>=3", "ncclient>=0.6", "requests>=2"]              # baked into atf-mgmt image (+ nmap in the OS)
+web  = ["fastapi>=0.110", "uvicorn>=0.27", "cryptography>=42"]      # backend API + at-rest secret encryption (SQLite is stdlib)
+test = ["pytest>=8", "httpx>=0.27"]                                 # regression suite (httpx for FastAPI TestClient)
+
+[project.scripts]
+atf = "atf.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests that need Docker + the anytest-checks-common repo (deselect with -m 'not integration')",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Pin the rule set so `ruff check` is deterministic across ruff versions (its defaults grow over
+# time). The classic default (pyflakes + a subset of pycodestyle) + warnings. Rules like B008
+# (Depends()/Body() in defaults) and BLE001/S110 (intentional best-effort catches) don't fit this
+# codebase and are intentionally not selected.
+select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.setuptools.packages.find]
+include = ["atf*"]
+
+[tool.setuptools.package-data]
+atf = ["templates/*.j2", "web/static/*", "store/*.sql"]

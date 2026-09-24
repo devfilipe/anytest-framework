@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "atf": {
+      "command": "python3",
+      "args": ["atf_mcp.py"]
+    }
+  }
+}
