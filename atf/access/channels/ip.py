@@ -7,7 +7,7 @@ Unifies the old craft + mgmt vantages, chosen by whether the driver has an **age
     scan/NSE and paramiko SSH for a board shell, using the bench-provided creds.
 
 The driver object carries its target address as ``ctx.<alias>.ip`` and exposes ping/tcp/scan/nse/sh,
-and ``restconf_get`` when the driver config has a ``restconf`` block.
+and ``restconf_get``/``restconf_request`` when the driver config has a ``restconf`` block.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from atf.access.host import icmp_ping
 
 DEFAULT_PORTS = (22, 80, 443, 830, 4565, 6379, 8080)
 DEFAULT_NMAP_PORTS = "1-1024,4565,6379,8080"
+RESTCONF_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 
 
 def _parse_nmap_grep(text: str) -> list[int]:
@@ -92,10 +93,10 @@ class IpChannel(Channel):
                             "-oN", "-", target], capture_output=True, text=True, timeout=timeout)
         return r.stdout
 
-    # --- RESTCONF (RFC 8040) reads, configured by the driver's `restconf` block ---
-    def _restconf_ssl(self) -> ssl.SSLContext:
+    # --- RESTCONF (RFC 8040), configured by the driver's `restconf` block ---
+    def _restconf_ssl(self, client_cert: bool = True) -> ssl.SSLContext:
         ctx = ssl.create_default_context(cadata=self._tls["ca"]) if self._tls.get("ca") else ssl.create_default_context()
-        if self._tls.get("cert") and self._tls.get("key"):
+        if client_cert and self._tls.get("cert") and self._tls.get("key"):
             # load_cert_chain reads files only: the PEM text lives in a private temp dir for the call
             with tempfile.TemporaryDirectory(prefix="atf-tls-") as d:
                 cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
@@ -105,26 +106,61 @@ class IpChannel(Channel):
                 ctx.load_cert_chain(cert, key)
         return ctx
 
-    def restconf_get(self, path: str, timeout: int = 30) -> tuple[int, object]:
-        """GET ``/restconf/data/<path>``; returns (HTTP status, parsed JSON body — or the raw text when
-        it is not JSON). An HTTP error status is returned, not raised; a transport failure raises."""
+    def _restconf(self, method: str, path: str, body=None, auth=None, timeout: int = 30) -> tuple[int, str]:
+        method = method.upper()
+        if method not in RESTCONF_METHODS:
+            raise ValueError(f"RESTCONF has no method {method} (use one of {', '.join(RESTCONF_METHODS)})")
         rc = self.cfg.get("restconf") or {}
         scheme = rc.get("scheme", "https")
         port = rc.get("port") or (443 if scheme == "https" else 80)
         headers = {"Accept": "application/yang-data+json"}
-        cr = self.creds.get(rc.get("role", self._role))
-        if cr is not None and cr.password and not self._tls.get("cert"):
-            # no client certificate: the role's credentials authenticate (Basic, RFC 7617)
-            headers["Authorization"] = "Basic " + base64.b64encode(f"{cr.user}:{cr.password}".encode()).decode()
-        req = urllib.request.Request(f"{scheme}://{self.ip}:{port}/restconf/data/{path}", headers=headers)
-        ctx = self._restconf_ssl() if scheme == "https" else None
+        client_cert = auth is None
+        if auth is None:
+            cr = self.creds.get(rc.get("role", self._role))
+            if cr is not None and cr.password and not self._tls.get("cert"):
+                auth = (cr.user, cr.password)    # no client certificate: the role's credentials (Basic, RFC 7617)
+        if auth:
+            headers["Authorization"] = "Basic " + base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/yang-data+json"
+        url = f"{scheme}://{self.ip}:{port}" + (path if path.startswith("/") else f"/restconf/data/{path}")
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        ctx = self._restconf_ssl(client_cert) if scheme == "https" else None
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                 status, raw = r.status, r.read()
         except urllib.error.HTTPError as e:
             with e:                       # an HTTPError holds the open response: close it
                 status, raw = e.code, e.read()
-        text = raw.decode("utf-8", "replace")
+        return status, raw.decode("utf-8", "replace")
+
+    def restconf_request(self, method: str, path: str, body=None, auth=None,
+                         timeout: int = 30) -> tuple[int, object]:
+        """A RESTCONF request: ``method`` is GET/POST/PUT/PATCH/DELETE, ``path`` is under
+        ``/restconf/data/`` (or from the server root when it starts with ``/``, e.g.
+        ``/restconf/operations/<rpc>``), ``body`` is sent as JSON (``application/yang-data+json``).
+
+        Authentication follows ``restconf_get``: the bench's client certificate over https, else the
+        restconf role's password (Basic). ``auth=(user, password)`` sends those credentials instead
+        and leaves the client certificate out, so the server sees only that identity;
+        ``auth=False`` sends no credentials at all.
+
+        Returns (HTTP status, parsed JSON body — the raw text when it is not JSON, None when it is
+        empty). An HTTP error status is returned, not raised; a transport failure raises."""
+        status, text = self._restconf(method, path, body, auth, timeout)
+        if not text:
+            return status, None
+        try:
+            return status, json.loads(text)
+        except ValueError:
+            return status, text
+
+    def restconf_get(self, path: str, timeout: int = 30) -> tuple[int, object]:
+        """GET ``/restconf/data/<path>``; returns (HTTP status, parsed JSON body — or the raw text when
+        it is not JSON). An HTTP error status is returned, not raised; a transport failure raises."""
+        status, text = self._restconf("GET", path, timeout=timeout)
         try:
             return status, json.loads(text)
         except ValueError:
