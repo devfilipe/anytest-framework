@@ -20,6 +20,8 @@ def _build_request(board: Board, check_ids: list[str]) -> dict:
             "drivers": drivers,
             "creds": {r: {"user": c.user, "password": c.password}
                       for r, c in board.creds.items()},
+            # client-certificate material of the drivers sent along (bench-scoped, like the creds)
+            "tls": {alias: m for alias, m in (getattr(board, "tls", None) or {}).items() if alias in drivers},
         },
         "checks": check_ids,
         "options": {},

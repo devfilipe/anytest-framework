@@ -6,12 +6,20 @@ Unifies the old craft + mgmt vantages, chosen by whether the driver has an **age
   - **without agent** → probe from the host / the atf-mgmt container (the old mgmt): ``nmap`` for
     scan/NSE and paramiko SSH for a board shell, using the bench-provided creds.
 
-The driver object carries its target address as ``ctx.<alias>.ip`` and exposes ping/tcp/scan/nse/sh.
+The driver object carries its target address as ``ctx.<alias>.ip`` and exposes ping/tcp/scan/nse/sh,
+and ``restconf_get`` when the driver config has a ``restconf`` block.
 """
 from __future__ import annotations
 
+import base64
+import json
+import os
 import socket
+import ssl
 import subprocess
+import tempfile
+import urllib.error
+import urllib.request
 
 from atf.access.channels.base import Channel, CmdResult
 from atf.access.host import icmp_ping
@@ -38,11 +46,13 @@ def _parse_nmap_grep(text: str) -> list[int]:
 class IpChannel(Channel):
     type = "ip"
 
-    def __init__(self, config, agent_conn=None, creds=None, role: str = "root", connect_timeout: int = 15):
+    def __init__(self, config, agent_conn=None, creds=None, role: str = "root", connect_timeout: int = 15,
+                 tls: dict | None = None):
         self.cfg = config or {}
         self.ip = self.cfg.get("ip")
         self.ac = agent_conn                 # None → probe from host / container
         self.creds = creds or {}
+        self._tls = tls or {}                # {cert, key, ca} PEM text for the restconf client
         self._role = role
         self._ct = connect_timeout
         self._cli = None
@@ -81,6 +91,43 @@ class IpChannel(Channel):
         r = subprocess.run(["nmap", "-Pn", "-sT", "-T4", "--script", scripts, "-p", str(ports),
                             "-oN", "-", target], capture_output=True, text=True, timeout=timeout)
         return r.stdout
+
+    # --- RESTCONF (RFC 8040) reads, configured by the driver's `restconf` block ---
+    def _restconf_ssl(self) -> ssl.SSLContext:
+        ctx = ssl.create_default_context(cadata=self._tls["ca"]) if self._tls.get("ca") else ssl.create_default_context()
+        if self._tls.get("cert") and self._tls.get("key"):
+            # load_cert_chain reads files only: the PEM text lives in a private temp dir for the call
+            with tempfile.TemporaryDirectory(prefix="atf-tls-") as d:
+                cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
+                for path, text in ((cert, self._tls["cert"]), (key, self._tls["key"])):
+                    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                        f.write(text)
+                ctx.load_cert_chain(cert, key)
+        return ctx
+
+    def restconf_get(self, path: str, timeout: int = 30) -> tuple[int, object]:
+        """GET ``/restconf/data/<path>``; returns (HTTP status, parsed JSON body — or the raw text when
+        it is not JSON). An HTTP error status is returned, not raised; a transport failure raises."""
+        rc = self.cfg.get("restconf") or {}
+        scheme = rc.get("scheme", "https")
+        port = rc.get("port") or (443 if scheme == "https" else 80)
+        headers = {"Accept": "application/yang-data+json"}
+        cr = self.creds.get(rc.get("role", self._role))
+        if cr is not None and cr.password and not self._tls.get("cert"):
+            # no client certificate: the role's credentials authenticate (Basic, RFC 7617)
+            headers["Authorization"] = "Basic " + base64.b64encode(f"{cr.user}:{cr.password}".encode()).decode()
+        req = urllib.request.Request(f"{scheme}://{self.ip}:{port}/restconf/data/{path}", headers=headers)
+        ctx = self._restconf_ssl() if scheme == "https" else None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                status, raw = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read()
+        text = raw.decode("utf-8", "replace")
+        try:
+            return status, json.loads(text)
+        except ValueError:
+            return status, text
 
     # --- board shell over SSH (no-agent ip vantage), using the bench creds ---
     def _ssh(self):

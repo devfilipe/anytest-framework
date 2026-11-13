@@ -24,10 +24,12 @@ def run(request: dict, out_root) -> dict:
 
     b = request["board"]
     creds = {r: Creds(**c) for r, c in (b.get("creds") or {}).items()}
+    tls = b.get("tls") or {}
     board = Board(name=b["name"], model=b.get("model", ""), serial=b.get("serial", ""),
-                  creds=creds, drivers=b.get("drivers") or {})
+                  creds=creds, drivers=b.get("drivers") or {}, tls=tls)
     # one IpChannel per driver in the request (all are ip-without-agent → host/container vantage)
-    drivers = {alias: IpChannel(cfg, None, creds) for alias, cfg in (b.get("drivers") or {}).items()}
+    drivers = {alias: IpChannel(cfg, None, creds, tls=tls.get(alias))
+               for alias, cfg in (b.get("drivers") or {}).items()}
     ctx = Ctx(board=board, host=HostProbe(), out_root=Path(out_root), drivers=drivers)
 
     started = time.time()

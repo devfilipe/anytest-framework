@@ -38,6 +38,7 @@ class Board:
     serial: str = ""
     creds: dict[str, Creds] = field(default_factory=dict)    # from the bench (role -> Creds)
     drivers: dict[str, dict] = field(default_factory=dict)   # alias -> {type, ...resolved props} (the ip/address lives here)
+    tls: dict[str, dict] = field(default_factory=dict)       # alias -> {cert, key, ca} PEM text, from a driver's restconf *_ref
     actions: dict[str, dict] = field(default_factory=dict)   # label -> {agent, signals{on/off/status}}
 
 
@@ -56,6 +57,20 @@ def _resolve_pw(spec: dict, secrets: dict) -> str:
     if ref is None:
         return ""
     return str(secrets.get(ref, ""))
+
+
+def _resolve_tls(drivers: dict, secrets: dict) -> dict[str, dict]:
+    """Client-certificate material of each driver's `restconf` block, looked up from the bench
+    secrets by its `cert_ref`/`key_ref`/`ca_ref`. Kept apart from the driver config, which only
+    names the refs, so the PEM text is never echoed where the config is."""
+    tls = {}
+    for alias, cfg in (drivers or {}).items():
+        rc = (cfg or {}).get("restconf") if isinstance(cfg, dict) else None
+        if isinstance(rc, dict):
+            material = {k: str(secrets.get(rc[f"{k}_ref"], "")) for k in ("cert", "key", "ca") if rc.get(f"{k}_ref")}
+            if material:
+                tls[alias] = material
+    return tls
 
 
 def default_secrets_path(bench_path: str) -> Path:
@@ -86,7 +101,8 @@ def parse(data: dict, secrets: dict) -> Bench:
         }
         boards.append(Board(
             name=b["name"], model=b.get("model", ""), serial=b.get("serial", ""),
-            creds=creds, drivers=b.get("drivers") or {}, actions=b.get("actions") or {}))
+            creds=creds, drivers=b.get("drivers") or {}, actions=b.get("actions") or {},
+            tls=_resolve_tls(b.get("drivers"), secrets)))
 
     return Bench(agents=agents, boards=boards)
 
