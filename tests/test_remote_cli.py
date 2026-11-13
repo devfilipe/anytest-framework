@@ -155,3 +155,60 @@ def test_a_run_that_fails_to_start_says_why(server, config_dir, monkeypatch, cap
 
     assert main(["remote", "run", "--bench", "no-such-bench", "--id", "host-recon", "--wait"]) == 1
     assert "no-such-bench" in capsys.readouterr().err
+
+
+SUITE_YAML = """title: Baseline
+select:
+  requirements:
+  - id: acme:E.3
+    sha1: aa987c1eec01
+    tests:
+    - id: host-recon
+      sha1: 0123456789ab
+  - id: acme:E.1
+    tests: []
+"""
+
+
+def test_suite_put_from_yaml_then_get_prints_it_as_the_store_has_it(server, config_dir, monkeypatch, capsys,
+                                                                     tmp_path, store):
+    import yaml
+
+    from atf.cli import main
+    _login(server, monkeypatch)
+    f = tmp_path / "baseline.yaml"
+    f.write_text(SUITE_YAML)
+    capsys.readouterr()
+
+    assert main(["remote", "suite", "put", "baseline", str(f)]) == 0
+    assert "baseline" in capsys.readouterr().out
+    assert main(["remote", "suite", "get", "baseline"]) == 0
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == store.get_suite("baseline")
+    assert printed["select"] == yaml.safe_load(SUITE_YAML)["select"]   # order of requirements kept
+
+
+def test_suite_put_takes_json_too(server, config_dir, monkeypatch, capsys, tmp_path, store):
+    from atf.cli import main
+    _login(server, monkeypatch)
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"title": "J", "select": {"requirements": [{"id": "acme:E.3", "tests": []}]}}))
+
+    assert main(["remote", "suite", "put", "j", str(f)]) == 0
+    assert store.get_suite("j")["select"]["requirements"][0]["id"] == "acme:E.3"
+
+
+def test_suite_get_of_an_unknown_suite_and_put_of_a_non_mapping_are_errors(server, config_dir, monkeypatch,
+                                                                           capsys, tmp_path):
+    from atf.cli import main
+    _login(server, monkeypatch)
+    capsys.readouterr()
+
+    assert main(["remote", "suite", "get", "nope"]) == 1
+    assert "404" in capsys.readouterr().err
+
+    f = tmp_path / "list.yaml"
+    f.write_text("- a\n- b\n")
+    assert main(["remote", "suite", "put", "x", str(f)]) == 1
+    assert "not a suite" in capsys.readouterr().err

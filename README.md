@@ -116,6 +116,8 @@ atf remote bench list                                            # the bench nam
 atf remote bench get lab > lab.json                              # a bench as JSON
 atf remote bench put lab lab.yaml                                # write it back (YAML or JSON)
 atf remote secret set lab board1_ca --file ca.pem                # a secret from a file, never printed
+atf remote suite get baseline > baseline.json                    # a suite as JSON
+atf remote suite put baseline baseline.yaml                      # write it (YAML or JSON; replaces it)
 atf remote run --bench lab --suite baseline --param phase=factory --wait   # run it, print the run id
 ```
 

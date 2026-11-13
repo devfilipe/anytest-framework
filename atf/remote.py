@@ -102,7 +102,8 @@ def bench_get(name: str) -> None:
     print(json.dumps(_api("GET", f"/api/benches/{urllib.request.quote(name)}"), indent=2, ensure_ascii=False))
 
 
-def bench_put(name: str, file: str) -> None:
+def _read_mapping(file: str, what: str):
+    """A YAML or JSON file that must hold a mapping (a bench, a suite)."""
     try:
         text = Path(file).read_text()
     except OSError as e:
@@ -116,9 +117,24 @@ def bench_put(name: str, file: str) -> None:
     except Exception as e:  # noqa: BLE001 — yaml.YAMLError or ValueError, reported as one line
         raise RemoteError(f"cannot read {file}: {e}" + ("" if yaml else " (YAML needs pyyaml; JSON works)")) from None
     if not isinstance(data, dict):
-        raise RemoteError(f"{file} is not a bench (a mapping with agents/boards)")
+        raise RemoteError(f"{file} is not {what}")
+    return data
+
+
+def bench_put(name: str, file: str) -> None:
+    data = _read_mapping(file, "a bench (a mapping with agents/boards)")
     _api("PUT", f"/api/benches/{urllib.request.quote(name)}", data)
     print(f"bench {name} written")
+
+
+def suite_get(name: str) -> None:
+    print(json.dumps(_api("GET", f"/api/suites/{urllib.request.quote(name)}"), indent=2, ensure_ascii=False))
+
+
+def suite_put(name: str, file: str) -> None:
+    data = _read_mapping(file, "a suite (a mapping with title/select)")
+    _api("PUT", f"/api/suites/{urllib.request.quote(name)}", data)
+    print(f"suite {name} written")
 
 
 def _pairs(items: list[str], what: str) -> dict:
@@ -265,6 +281,13 @@ def add_parser(sub) -> None:
     bw = bs.add_parser("put", help="write a bench from a YAML or JSON file (replaces it)")
     bw.add_argument("name")
     bw.add_argument("file")
+    sup = rs.add_parser("suite", help="read or write a suite of the server's store")
+    sus = sup.add_subparsers(dest="suite_cmd", required=True)
+    sg = sus.add_parser("get", help="print a suite as JSON")
+    sg.add_argument("name")
+    sw = sus.add_parser("put", help="write a suite from a YAML or JSON file (replaces it)")
+    sw.add_argument("name")
+    sw.add_argument("file")
     dp = rs.add_parser("driver", help="change one driver of a board in a bench")
     ds = dp.add_subparsers(dest="driver_cmd", required=True)
     dset = ds.add_parser("set", help="set props and the restconf (mTLS) block of a driver")
@@ -320,6 +343,10 @@ def run(args) -> int:
             bench_get(args.name)
         elif args.remote_cmd == "bench" and args.bench_cmd == "put":
             bench_put(args.name, args.file)
+        elif args.remote_cmd == "suite" and args.suite_cmd == "get":
+            suite_get(args.name)
+        elif args.remote_cmd == "suite" and args.suite_cmd == "put":
+            suite_put(args.name, args.file)
         elif args.remote_cmd == "driver" and args.driver_cmd == "set":
             driver_set(args.bench, args.board, args.alias, args.prop, args.restconf, args.no_restconf)
         elif args.remote_cmd == "run":
