@@ -51,7 +51,7 @@ class Record:
     source: str = ""         # check-source repo the test was loaded from (provenance)
 
 
-def _build_ctx(bench: Bench, board: Board, out_root: Path) -> Ctx:
+def _build_ctx(bench: Bench, board: Board, out_root: Path, params: Optional[dict] = None) -> Ctx:
     """Per-board context, alias-keyed. In-process drivers: `serial` (console) and `ip`-with-agent
     (old craft). An `ip` driver WITHOUT an agent (the management/nmap vantage) is built in the
     worker, not here."""
@@ -70,7 +70,8 @@ def _build_ctx(bench: Bench, board: Board, out_root: Path) -> Ctx:
     from atf.access.actions import Actions
     acfg = getattr(board, "actions", None)
     actions = Actions(acfg, bench.agents) if acfg else None
-    return Ctx(board=board, host=HostProbe(), out_root=out_root, drivers=drivers, actions=actions)
+    return Ctx(board=board, host=HostProbe(), out_root=out_root, drivers=drivers, actions=actions,
+               params=dict(params or {}))
 
 
 def _severity(res: Result, spec: CheckSpec) -> Severity:
@@ -181,13 +182,16 @@ def run(bench: Bench, specs: list[CheckSpec], out_root: Path,
         mgmt_backend: str = "docker", mgmt_image: str = DEFAULT_MGMT_IMAGE,
         suite: str = "", bench_name: str = "", on_record=None, cancel=None,
         suite_select: Optional[dict] = None, run_id: Optional[str] = None,
-        expected: Optional[list[str]] = None) -> list[Record]:
+        expected: Optional[list[str]] = None, params: Optional[dict] = None) -> list[Record]:
     """`on_record(rec)` (optional) is called after each check result — a progress hook for
     a live UI. It must not raise (a bad callback can't break the run). `cancel` (optional
     threading.Event) is checked between checks — set it to stop the run early. `run_id` lets the
     caller pre-assign the run identity (so a per-run artifact dir can be named before the run).
     `expected` is the test ids the caller named (default: the ones `suite_select` names); each one
-    that does not reach a board gets an ERROR record saying why, instead of no record at all."""
+    that does not reach a board gets an ERROR record saying why, instead of no record at all.
+    `params` are the run parameters every check reads as `ctx.params` (in-process and in the mgmt
+    worker); run-meta records them."""
+    params = dict(params or {})
     run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S")
     records: list[Record] = []
     boards = [b for b in bench.boards if not boards_filter or b.name in boards_filter]
@@ -265,7 +269,7 @@ def run(bench: Bench, specs: list[CheckSpec], out_root: Path,
         def needs_container(spec):
             return bool(set(spec.drivers) & container_aliases)
 
-        ctx = _build_ctx(bench, board, out_root)
+        ctx = _build_ctx(bench, board, out_root, params)
         try:
             i = 0
             while i < len(bspecs):
@@ -277,7 +281,8 @@ def run(bench: Bench, specs: list[CheckSpec], out_root: Path,
                         j += 1
                     from atf.access.mgmt import dispatch as mgmt_dispatch
                     for d in mgmt_dispatch.dispatch(board, bspecs[i:j], out_root,
-                                                   backend=mgmt_backend, image=mgmt_image):
+                                                   backend=mgmt_backend, image=mgmt_image,
+                                                   params=params):
                         add(board.name, d)
                     i = j
                 else:
@@ -298,6 +303,7 @@ def run(bench: Bench, specs: list[CheckSpec], out_root: Path,
         "bench": {"name": bench_name,
                   "boards": [{"name": b.name, "model": b.model, "serial": b.serial} for b in boards]},
         "sources": src_versions,
+        "params": params,                      # the run parameters the checks read as ctx.params
         "select": suite_select or {},          # suite map (requirement↔test) → requirement-centric report
         # check files discovery skipped (another source shadows them) — the report warns about them
         "unloaded": [{k: u[k] for k in ("source", "file", "reason")} for u in _checks.UNLOADED],

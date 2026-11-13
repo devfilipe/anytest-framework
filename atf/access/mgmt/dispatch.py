@@ -10,7 +10,7 @@ from atf.core.inventory import Board
 from atf.core.model import CheckSpec
 
 
-def _build_request(board: Board, check_ids: list[str]) -> dict:
+def _build_request(board: Board, check_ids: list[str], params: dict | None = None) -> dict:
     # only the ip-like drivers without an agent run in the container (the host/nmap vantage)
     drivers = {alias: cfg for alias, cfg in (board.drivers or {}).items()
                if isinstance(cfg, dict) and cfg.get("type") != "serial" and not cfg.get("agent")}
@@ -24,7 +24,7 @@ def _build_request(board: Board, check_ids: list[str]) -> dict:
             "tls": {alias: m for alias, m in (getattr(board, "tls", None) or {}).items() if alias in drivers},
         },
         "checks": check_ids,
-        "options": {},
+        "options": {"params": dict(params or {})},       # the run parameters: ctx.params in the worker
     }
 
 
@@ -70,8 +70,8 @@ def _local(request: dict, out_root: Path) -> dict:
 
 
 def dispatch(board: Board, specs: list[CheckSpec], out_root: Path,
-             backend: str = "docker", image: str = "atf-mgmt:latest") -> list[dict]:
+             backend: str = "docker", image: str = "atf-mgmt:latest", params: dict | None = None) -> list[dict]:
     ids = [s.id for s in specs]
-    request = _build_request(board, ids)
+    request = _build_request(board, ids, params)
     resp = _local(request, out_root) if backend == "local" else _docker(request, out_root, image)
     return resp.get("results", [])

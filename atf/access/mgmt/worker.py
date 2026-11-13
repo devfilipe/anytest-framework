@@ -30,7 +30,8 @@ def run(request: dict, out_root) -> dict:
     # one IpChannel per driver in the request (all are ip-without-agent → host/container vantage)
     drivers = {alias: IpChannel(cfg, None, creds, tls=tls.get(alias))
                for alias, cfg in (b.get("drivers") or {}).items()}
-    ctx = Ctx(board=board, host=HostProbe(), out_root=Path(out_root), drivers=drivers)
+    ctx = Ctx(board=board, host=HostProbe(), out_root=Path(out_root), drivers=drivers,
+              params=dict((request.get("options") or {}).get("params") or {}))
 
     started = time.time()
     results = []

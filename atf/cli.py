@@ -151,7 +151,8 @@ def main(argv=None) -> int:
         boards = (set(_b) if isinstance(_b, list) else {_b}) if _b else None
         recs = runner.run(bench, specs, Path(req["out"]), boards_filter=boards,
                           mgmt_backend=req.get("mgmt_backend", "local"),
-                          suite=req.get("suite", ""), bench_name=name, suite_select=sel)
+                          suite=req.get("suite", ""), bench_name=name, suite_select=sel,
+                          params=req.get("params") or {})
         payload = json.dumps([dataclasses.asdict(r) for r in recs])
         # hand results back via a file — robust against any stdout noise a check may print
         (Path(req["out"]) / "records.json").write_text(payload)

@@ -160,11 +160,24 @@ def secret_set(bench: str, ref: str, file: str) -> None:
     print(f"secret {ref} of bench {bench} written ({len(value)} characters)")
 
 
+def _params(items: list[str]) -> dict:
+    """`--param key=value` options as a dict of strings (only the first `=` splits)."""
+    out = {}
+    for item in items or []:
+        k, sep, v = item.partition("=")
+        if not sep or not k.strip():
+            raise RemoteError(f"--param {item!r}: expected key=value")
+        out[k.strip()] = v
+    return out
+
+
 def run_start(bench: str, boards: list[str], suite: str, ids: list[str], mgmt_backend: str,
-              wait: bool, timeout: float) -> None:
+              wait: bool, timeout: float, params: list[str] | None = None) -> None:
     """Start a run on the server; with `wait`, follow it to the end and print its run id and records."""
     import time
     body = {"bench": bench, "mgmt_backend": mgmt_backend}
+    if params:
+        body["params"] = _params(params)
     if boards:
         body["board"] = boards
     if suite:
@@ -242,6 +255,8 @@ def add_parser(sub) -> None:
     rp.add_argument("--board", action="append", default=[], help="board to run on (repeatable; default: all)")
     rp.add_argument("--suite", default="", help="a saved suite")
     rp.add_argument("--id", action="append", default=[], dest="ids", help="a test id (repeatable)")
+    rp.add_argument("--param", action="append", default=[],
+                    help="key=value the checks read as ctx.params (repeatable); recorded in run-meta, so no secrets")
     rp.add_argument("--mgmt-backend", default="local", choices=["local", "docker"])
     rp.add_argument("--wait", action="store_true", help="follow the run and print its id and records")
     rp.add_argument("--timeout", type=float, default=3600, help="seconds to wait with --wait")
@@ -275,7 +290,8 @@ def run(args) -> int:
         elif args.remote_cmd == "run":
             if not (args.suite or args.ids):
                 raise RemoteError("give --suite or at least one --id")
-            run_start(args.bench, args.board, args.suite, args.ids, args.mgmt_backend, args.wait, args.timeout)
+            run_start(args.bench, args.board, args.suite, args.ids, args.mgmt_backend, args.wait, args.timeout,
+                      args.param)
         elif args.remote_cmd == "report" and args.report_cmd == "download":
             report_download(args.run_id, args.out)
         elif args.remote_cmd == "secret" and args.secret_cmd == "set":

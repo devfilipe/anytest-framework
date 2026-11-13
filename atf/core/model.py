@@ -63,13 +63,16 @@ class Ctx:
     """Per-(board) run context handed to a check. Comm drivers are alias-keyed: a check reaches
     one as ``ctx.<alias>`` (e.g. ``ctx.mgmt`` / ``ctx.console`` / ``ctx.craft`` / ``ctx.oob``),
     present if and only if the bench wired a driver with that alias. Each driver object carries its own props
-    (e.g. ``ctx.mgmt.ip``) and probe methods. ``ctx.host`` is always present."""
+    (e.g. ``ctx.mgmt.ip``) and probe methods. ``ctx.host`` is always present. ``ctx.params`` holds the
+    parameters the run was started with (``{}`` when none) — the same for every check of the run, and
+    recorded in run-meta, so never a secret."""
     board: "Board"
     host: "HostProbe"
     out_root: Path
     drivers: dict[str, "Channel"] = field(default_factory=dict)   # alias -> Channel (wired drivers)
     actions: Optional["Actions"] = None       # node actions (power-cycle, …) configured on the bench
     check_id: str = ""                        # set by the runner per check; names evidence
+    params: dict[str, Any] = field(default_factory=dict)   # the run's parameters (`atf remote run --param`)
 
     def __getattr__(self, name: str):
         # alias-keyed driver access; only reached when `name` isn't a real attribute

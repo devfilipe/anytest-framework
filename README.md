@@ -116,7 +116,11 @@ atf remote bench list                                            # the bench nam
 atf remote bench get lab > lab.json                              # a bench as JSON
 atf remote bench put lab lab.yaml                                # write it back (YAML or JSON)
 atf remote secret set lab board1_ca --file ca.pem                # a secret from a file, never printed
+atf remote run --bench lab --suite baseline --param phase=factory --wait   # run it, print the run id
 ```
+
+Each `--param key=value` reaches every check of the run as `ctx.params` (a dict of strings) and is
+recorded in the run's `run-meta.json` — so never pass a secret that way.
 
 Only the session token is kept, in `~/.config/atf/session.json` (owner-only; `ATF_CONFIG_DIR`
 moves it). The server holds tokens in memory, so a restart asks for `atf remote login` again;

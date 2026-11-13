@@ -110,6 +110,12 @@ def _framework_version() -> dict:
 
 
 # ------------------------- run engine -------------------------
+def _valid_params(params) -> bool:
+    """Run parameters are a flat mapping (name → string, number or boolean), or absent."""
+    return params is None or (isinstance(params, dict) and all(
+        isinstance(k, str) and (v is None or isinstance(v, (str, int, float, bool))) for k, v in params.items()))
+
+
 class RunState:
     def __init__(self, out_root: Path, bench_path: str, repo=None, locks=None):
         self.out_root = out_root
@@ -132,6 +138,8 @@ class RunState:
         return self.events[n:]
 
     def start(self, params: dict) -> bool:
+        if not _valid_params(params.get("params")):
+            raise ValueError("params must be a mapping of names to strings, numbers or booleans")
         if not self.lock.acquire(blocking=False):
             return False
         self.events = []
@@ -187,6 +195,7 @@ class RunState:
         lock_held = False
         try:
             self._emit({"type": "start", "params": params})
+            run_params = params.get("params") or {}      # the run parameters the checks read as ctx.params
             bench_name = params.get("bench") or ""
             raw = None
             if params.get("suite") and not (params.get("req") or params.get("ids")):
@@ -243,7 +252,7 @@ class RunState:
                 try:
                     raw_recs, _dev, out_dir, run_meta = _agent_worker_run(
                         self.hub, via_agent, bench_stem, list(boards) if boards else None,
-                        sel_for_agent, params.get("mgmt_backend", "local"))
+                        sel_for_agent, params.get("mgmt_backend", "local"), params=run_params)
                     # persist the agent's out dir (evidence + run-meta) as this run's artifact dir
                     run_dir.parent.mkdir(parents=True, exist_ok=True)
                     if run_dir.exists():
@@ -273,7 +282,8 @@ class RunState:
                                   bench_name=bench_stem, on_record=on_record,
                                   cancel=self.cancel_event, run_id=run_id,
                                   suite_select=(raw.get("select", raw) if raw else None),
-                                  expected=(None if raw else list(params.get("ids") or [])))
+                                  expected=(None if raw else list(params.get("ids") or [])),
+                                  params=run_params)
             # load the run-meta the runner/worker just wrote, then enrich it with run provenance
             # (who ran it, when, the framework + environment versions, the user's connected agent(s)
             # and AI state) so the rendered report AND the stored report row both carry it.
@@ -610,11 +620,12 @@ def _exec_last_expr(src: str, g: dict):
 
 
 # ------------------------- FastAPI app -------------------------
-def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend: str, timeout: int = 900):
+def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend: str, timeout: int = 900,
+                      params: dict | None = None):
     """Upload a connected agent's working tree and run `atf _agent-worker` against it (the agent's
     checks execute on the server from its uploaded sources). Returns (records, dev_dirs, out_dir, meta)
     where meta is the run-meta snapshot (bench + the agent trees' versions as loaded). Caller owns
-    out_dir cleanup. `board` may be a str or a list."""
+    out_dir cleanup. `board` may be a str or a list; `params` are the run parameters (ctx.params)."""
     import shutil
     import subprocess as sp
     import sys
@@ -630,7 +641,7 @@ def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend
     from atf.web.agents import work_root
     out = Path(tempfile.mkdtemp(prefix="atf-agent-run-", dir=work_root()))
     req = {"bench": bench_stem, "board": board, "out": str(out),
-           "select": select, "mgmt_backend": mgmt_backend}
+           "select": select, "mgmt_backend": mgmt_backend, "params": dict(params or {})}
     # The agent's UNTRUSTED check code runs in this subprocess. Resolve the bench HERE (the server has
     # APP_SECRET) and hand the worker the bench dict + its creds already decrypted, so the worker
     # never needs APP_SECRET — then strip it from the subprocess env. A malicious check can still read
@@ -1096,7 +1107,10 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
     @app.post("/api/run")
     def run_start(params: dict = Body(default={}), me=Depends(require_login)):
         params["owner"] = me["username"]                # the run (report) is attributed to you
-        ok = state.start(params)
+        try:
+            ok = state.start(params)
+        except ValueError as e:
+            return {"started": False, "error": str(e)}
         return {"started": ok, "error": None if ok else "a run is already active"}
 
     @app.post("/api/run/cancel")
@@ -2131,6 +2145,8 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         board = body.get("board")
         if not board:
             raise HTTPException(400, "need {board}")
+        if not _valid_params(body.get("params")):
+            raise HTTPException(400, "params must be a mapping of names to strings, numbers or booleans")
         import time as _t
         _bench = state._load_bench(Path(bench_path).stem)
         run_id = f"agent-{s.name}-{int(_t.time() * 1000)}"
@@ -2143,7 +2159,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
             records, dev_dirs, out = _agent_worker_run(
                 hub, s, Path(bench_path).stem, board,
                 {"ids": body.get("ids"), "req": body.get("req"), "vectors": body.get("vectors")},
-                body.get("mgmt_backend", "local"))
+                body.get("mgmt_backend", "local"), params=body.get("params"))
             for r in records:
                 rel = r.get("evidence")
                 r["evidence_text"] = ((out / rel).read_text()[:20000]
