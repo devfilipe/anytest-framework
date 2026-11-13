@@ -1,46 +1,13 @@
 """`atf remote …`: the CLI as a client of a running atf server. Each test runs the real web app in a
 local uvicorn on a fresh store and drives it through `atf.cli.main`, the way an operator would from
-another machine. The session (server URL + token, never the password) lives in ATF_CONFIG_DIR."""
+another machine. The session (server URL + token, never the password) lives in ATF_CONFIG_DIR.
+The `server` and `config_dir` fixtures are in conftest.py."""
 from __future__ import annotations
 
 import json
 import os
-import socket
 import stat
-import threading
-import time
 
-import pytest
-
-
-@pytest.fixture
-def server(store, discovered, tmp_path):
-    """The atf web app served over HTTP on 127.0.0.1, backed by the fresh store (admin/admin)."""
-    import uvicorn
-
-    from atf.web.server import build_app
-    from tests.conftest import EXAMPLES
-    store.upsert_bench("lab", {"agents": {}, "boards": [
-        {"name": "board-1", "model": "router-x", "serial": "1", "creds": {},
-         "drivers": {"mgmt": {"driver_name": "ip", "ip": "192.0.2.1"}}}]})
-    app = build_app(tmp_path / "out", str(EXAMPLES / "benches" / "lab.yaml"), store)
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
-    threading.Thread(target=srv.run, daemon=True).start()
-    deadline = time.time() + 10
-    while not srv.started and time.time() < deadline:
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}"
-    srv.should_exit = True
-
-
-@pytest.fixture
-def config_dir(tmp_path, monkeypatch):
-    d = tmp_path / "atf-config"
-    monkeypatch.setenv("ATF_CONFIG_DIR", str(d))
-    return d
 
 
 def _login(server, monkeypatch, password="admin"):
@@ -109,3 +76,17 @@ def test_secret_set_stores_the_file_content_and_never_prints_it(server, config_d
     out = capsys.readouterr()
     assert "MIGHAgEA" not in out.out + out.err
     assert store.secrets("lab", reveal=True)["k"] == pem
+
+
+def test_bench_list_names_the_benches_and_logout_forgets_the_session(server, config_dir, monkeypatch, capsys):
+    from atf.cli import main
+    _login(server, monkeypatch)
+    capsys.readouterr()
+
+    assert main(["remote", "bench", "list"]) == 0
+    assert "lab" in capsys.readouterr().out.split()
+
+    assert main(["remote", "logout"]) == 0
+    assert not (config_dir / "session.json").exists()
+    assert main(["remote", "bench", "list"]) == 1
+    assert "atf remote login" in capsys.readouterr().err

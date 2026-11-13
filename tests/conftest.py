@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import socket
+import threading
+import time
 
 import pytest
 
@@ -47,3 +50,32 @@ def example_bench():
     """The parsed example bench (one board, a mgmt ip driver at 127.0.0.1)."""
     from atf.core import inventory
     return inventory.load(str(EXAMPLES / "benches" / "lab.yaml"))
+
+
+@pytest.fixture
+def server(store, discovered, tmp_path):
+    """The atf web app served over HTTP on 127.0.0.1, backed by the fresh store (admin/admin)."""
+    import uvicorn
+
+    from atf.web.server import build_app
+    store.upsert_bench("lab", {"agents": {}, "boards": [
+        {"name": "board-1", "model": "router-x", "serial": "1", "creds": {},
+         "drivers": {"mgmt": {"driver_name": "ip", "ip": "192.0.2.1"}}}]})
+    app = build_app(tmp_path / "out", str(EXAMPLES / "benches" / "lab.yaml"), store)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    threading.Thread(target=srv.run, daemon=True).start()
+    deadline = time.time() + 10
+    while not srv.started and time.time() < deadline:
+        time.sleep(0.05)
+    yield f"http://127.0.0.1:{port}"
+    srv.should_exit = True
+
+
+@pytest.fixture
+def config_dir(tmp_path, monkeypatch):
+    d = tmp_path / "atf-config"
+    monkeypatch.setenv("ATF_CONFIG_DIR", str(d))
+    return d

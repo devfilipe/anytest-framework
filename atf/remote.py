@@ -83,6 +83,20 @@ def login(server: str, user: str) -> None:
     print(f"logged in to {server} as {user}")
 
 
+def logout() -> None:
+    """Forget the local session (the server drops the token itself on restart)."""
+    try:
+        _session_path().unlink()
+    except FileNotFoundError:
+        pass
+    print("logged out")
+
+
+def bench_list() -> None:
+    for b in _api("GET", "/api/benches") or []:
+        print(b["name"] if isinstance(b, dict) else b)
+
+
 def bench_get(name: str) -> None:
     print(json.dumps(_api("GET", f"/api/benches/{urllib.request.quote(name)}"), indent=2, ensure_ascii=False))
 
@@ -115,8 +129,10 @@ def add_parser(sub) -> None:
     lg = rs.add_parser("login", help="log in and keep the session token (asks for the password)")
     lg.add_argument("--server", required=True, help="atf server URL, e.g. http://192.0.2.10:8899")
     lg.add_argument("--user", required=True)
+    rs.add_parser("logout", help="forget the local session")
     bp = rs.add_parser("bench", help="read or write a bench of the server's store")
     bs = bp.add_subparsers(dest="bench_cmd", required=True)
+    bs.add_parser("list", help="the bench names")
     bg = bs.add_parser("get", help="print a bench as JSON")
     bg.add_argument("name")
     bw = bs.add_parser("put", help="write a bench from a YAML or JSON file (replaces it)")
@@ -134,6 +150,10 @@ def run(args) -> int:
     try:
         if args.remote_cmd == "login":
             login(args.server, args.user)
+        elif args.remote_cmd == "logout":
+            logout()
+        elif args.remote_cmd == "bench" and args.bench_cmd == "list":
+            bench_list()
         elif args.remote_cmd == "bench" and args.bench_cmd == "get":
             bench_get(args.name)
         elif args.remote_cmd == "bench" and args.bench_cmd == "put":
