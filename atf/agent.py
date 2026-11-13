@@ -322,8 +322,14 @@ def _inspect(sources: list[Path]) -> list[dict]:
     return out
 
 
-def _tar(sources: list[Path]) -> bytes:
-    """Pack each source dir as tree/<name>/… (skipping vcs/caches/secrets)."""
+# Manifest at the root of an uploaded tree: each source's git state at upload time, so the server
+# labels the run with the code that actually ran (not the state seen at registration).
+TREE_MANIFEST = ".atf-sources.json"
+
+
+def _tar(sources: list[Path], manifest: bool = True) -> bytes:
+    """Pack each source dir as tree/<name>/… (skipping vcs/caches/secrets), plus TREE_MANIFEST with
+    each source's git state as of now (`manifest=False` packs the tree alone, like older agents)."""
     buf = io.BytesIO()
 
     def _filter(ti: tarfile.TarInfo):
@@ -335,6 +341,11 @@ def _tar(sources: list[Path]) -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for src in sources:
             tf.add(str(src), arcname=src.name, filter=_filter)
+        if manifest:
+            raw = json.dumps([_source_info(p) for p in sources]).encode()
+            ti = tarfile.TarInfo(TREE_MANIFEST)
+            ti.size, ti.mtime = len(raw), int(time.time())
+            tf.addfile(ti, io.BytesIO(raw))
     return buf.getvalue()
 
 

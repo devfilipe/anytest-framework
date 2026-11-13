@@ -300,18 +300,10 @@ class RunState:
                 except Exception:
                     run_meta = {}
             run_meta["run"] = self._run_provenance(params, via_agent)
-            if via_agent is not None:              # an uploaded working tree isn't a git repo on the
-                _by_src = {s.get("name"): s for s in (via_agent.sources or [])}   # server, so server-side
-                for sd in (run_meta.get("sources") or []):                        # git can't read its sha —
-                    sd["agent"] = via_agent.name       # which agent/user provided these sources
+            if via_agent is not None:              # which agent/user provided these sources (the trees'
+                for sd in (run_meta.get("sources") or []):   # git state is stamped by _agent_worker_run)
+                    sd["agent"] = via_agent.name
                     sd["owner"] = via_agent.owner
-                    if not sd.get("commit"):                                      # use what the agent reported
-                        a = _by_src.get(sd.get("name"))
-                        if a:
-                            sd["commit"] = (a.get("head") or "")[:12]
-                            sd["ref"] = sd.get("ref") or a.get("branch") or ""
-                            sd["dirty"] = bool(a.get("dirty"))
-                            sd["origin"] = f"agent:{via_agent.name}"
             try:
                 (run_dir / "run-meta.json").write_text(json.dumps(run_meta, ensure_ascii=False))
             except Exception:
@@ -643,6 +635,7 @@ def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend
     if not ev.wait(timeout=45):
         raise RuntimeError("agent did not upload its tree in time")
     tree = s.uploads[tok]["dir"]
+    fresh = s.uploads[tok].get("sources")              # the agent's git state at upload (None: older agent)
     dev_dirs = [str(p) for p in sorted(Path(tree).iterdir()) if p.is_dir()]   # dev trees win
     srcs = dev_dirs + [str(p) for p in source_paths()]
     from atf.web.agents import work_root
@@ -685,7 +678,32 @@ def _agent_worker_run(hub, s, bench_stem: str, board, select: dict, mgmt_backend
             meta = json.loads(mp.read_text())
         except Exception:
             meta = {}
+    _stamp_agent_sources(meta, Path(tree), fresh, s)
     return json.loads(rec_file.read_text()), dev_dirs, out, meta
+
+
+def _stamp_agent_sources(meta: dict, tree: Path, fresh: list | None, s) -> None:
+    """Record, in the run-meta, the git state of each source that came from the agent's uploaded tree.
+    That tree isn't a git repo on the server, so the worker can't read it: use what the agent reported
+    WITH the upload (`state_at: upload`); an older agent sends nothing, so fall back to what it reported
+    when it registered (`state_at: register`), which may predate the code that ran."""
+    reported = {a.get("name"): a for a in (fresh if fresh is not None else (getattr(s, "sources", None) or []))}
+    tree = tree.resolve()
+    for sd in meta.get("sources") or []:
+        if not sd.get("path"):
+            continue
+        try:
+            Path(sd["path"]).resolve().relative_to(tree)
+        except ValueError:
+            continue                                     # a server-side source: its own git state stands
+        a = reported.get(sd.get("name"))
+        if not a:
+            continue
+        sd["commit"] = (a.get("head") or "")[:12]
+        sd["ref"] = "" if a.get("branch") == "HEAD" else (a.get("branch") or "")   # detached: no ref
+        sd["dirty"] = bool(a.get("dirty"))
+        sd["origin"] = f"agent:{getattr(s, 'name', '')}"
+        sd["state_at"] = "upload" if fresh is not None else "register"
 
 
 def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:

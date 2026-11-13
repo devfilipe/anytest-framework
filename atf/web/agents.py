@@ -8,6 +8,7 @@ developer's *uncommitted* code executes against the real bench without a git rou
 from __future__ import annotations
 
 import io
+import json
 import os
 import queue
 import secrets
@@ -31,6 +32,23 @@ def work_root() -> str | None:
     if w:
         os.makedirs(w, exist_ok=True)
     return w
+
+
+TREE_MANIFEST = ".atf-sources.json"     # the agent's per-source git state at upload (see atf.agent)
+
+
+def _take_manifest(tree: Path) -> list | None:
+    """Pop the agent's upload manifest out of an extracted tree: `[{name, branch, head, dirty}]` as of
+    the upload, or None when the agent predates it (or sent something unreadable)."""
+    f = tree / TREE_MANIFEST
+    if not f.is_file():
+        return None
+    try:
+        data = json.loads(f.read_text())
+    except ValueError:
+        data = None
+    f.unlink()
+    return data if isinstance(data, list) else None
 
 
 class AgentSession:
@@ -137,6 +155,7 @@ class AgentHub:
         up = s.uploads.get(tok)
         if up is not None:
             up["dir"] = d
+            up["sources"] = _take_manifest(d)
             up["event"].set()
         return d
 
