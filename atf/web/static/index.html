@@ -157,6 +157,7 @@
       <button data-t="reports" class="on">🗎&nbsp; Reports</button>
       <button data-t="activity">📡&nbsp; Activity</button>
       <button data-t="docs">📖&nbsp; Documentation</button>
+      <button data-t="help">❓&nbsp; Help</button>
       <div class="nav-group">Studio</div>
       <button data-t="ad-agents">🖧&nbsp; Agents</button>
       <button data-t="st-wizard">✨&nbsp; AI Wizard</button>
@@ -290,6 +291,7 @@ function render(tab){
   if(tab==="ad-backup") return adminGate(m,renderBackupAdmin);
   if(tab==="activity") return loginGate(m,renderActivity);
   if(tab==="docs") return renderDocs(m);
+  if(tab==="help") return renderHelp(m);
 }
 
 // ---------------- Admin (login-gated: default admin/admin) ----------------
@@ -2292,6 +2294,86 @@ guide to running it safely; it is about **good practice and trust boundaries**, 
   unattended use. The black-box rule keeps checks probing from the outside — never logging into a
   device to read its config as a measurement shortcut.`;
 function _docSection(title,body,open){ return `<details ${open?'open':''} style="margin-bottom:10px"><summary style="cursor:pointer;padding:11px 14px;background:var(--raised);border-radius:var(--radius);font-weight:600;font-size:14px">${title}</summary><div class="md" style="padding:12px 18px 4px;max-width:860px">${md(body)}</div></details>`; }
+// ---------------- Help: what each part of the framework does, for the person using it ----------------
+function _helpMd(){ const S=location.origin; return `## Getting around
+
+Press **🧭 tour** (bottom of the menu) for a guided walk through the pages. Everything here is also an
+API (\`${S}/api/docs\`), a terminal client and an MCP server — see *Use it from your machine*.
+
+## The pages
+
+| Page | What it is for |
+|---|---|
+| **Run** | Run a suite or chosen tests on a bench and boards; live log while it runs. |
+| **Test Plans** | A named suite + bench/board, ready to run again. |
+| **Locks** | Who holds which board right now — a run takes its boards' locks so two runs never share one. |
+| **Reports** | Every run: verdict per test and board, the requirement roll-up, the raw evidence each probe saw. |
+| **Activity** | Who is signed in, which agents are connected, what is running. |
+| **Agents** | The machines lending their check repositories to this server (see below). |
+| **Requirements** | Requirement catalogues (frameworks) — the left side of a suite. |
+| **Tests** | Every check the server knows, from its repositories and from connected agents. |
+| **Inventory** | Shared agents (bench nodes), boards, and the driver and action types. |
+| **Benches** | A bench wires inventory boards to drivers under an alias (\`mgmt\`, \`console\`, \`craft\`…). |
+| **Suites** | The requirement → test map, in run order, with a fallback when no test applies. |
+| **Secrets** | Passwords, certificates and keys of a bench, encrypted at rest, never shown again. |
+
+## Benches, drivers and health
+
+A test declares the drivers it needs; a bench gives each board drivers under those aliases. A test
+whose driver a bench lacks is **skipped**, never failed.
+
+- **ip** — a network target (\`ctx.<alias>.ip\`): scans, TLS, SSH, RESTCONF. With an *agent* it is
+  probed from that node's segment (the craft port); without, from this server.
+- **serial** — a console bridged by an agent (a Raspberry Pi, a laptop) over SSH or ser2net.
+
+The **Health** column on Benches has one dot per board driver: green when the server reaches its port,
+amber when only ping answers, red when nothing does (hover for the reason, ⟳ to probe again). It is a
+network probe only — ping and a TCP connect, never a login — cached for 60 s.
+
+## RESTCONF and mutual TLS
+
+To let tests read a board's state, open the bench, find its \`ip\` driver and tick **RESTCONF**:
+
+1. Under **Secrets**, add the client certificate, its private key and the CA chain — **📄 from file**
+   reads a PEM without showing it.
+2. In the driver, pick *https*, the role (e.g. \`monitor\`) and those three secrets.
+3. On the board, the certificate's CN must be authorised for that role.
+
+With *http*, the role's password authenticates instead.
+
+## Use it from your machine
+
+**Lend your checks (agent).** Your uncommitted tests run on the shared benches:
+
+\`\`\`bash
+curl -fsSL ${S}/agent.py -o atf-agent.py
+python3 -u atf-agent.py --server ${S} --token <your token, from Agents> --source <your check repo>
+\`\`\`
+
+**Terminal and AI client (atf.pyz).** One file, no install — the same API from a shell or an MCP client:
+
+\`\`\`bash
+curl -fsSL ${S}/atf.pyz -o atf.pyz
+python3 atf.pyz remote login --server ${S} --user <you>   # asks for the password; keeps a token only
+python3 atf.pyz remote bench list
+python3 atf.pyz remote driver set <bench> <board> mgmt --restconf scheme=https --restconf role=monitor
+python3 atf.pyz remote secret set <bench> <ref> --file client.pem
+claude mcp add atf -- python3 $PWD/atf.pyz mcp            # every API operation as MCP tools
+\`\`\`
+
+The session lives in \`~/.config/atf/session.json\` (owner-only); a server restart asks for \`remote
+login\` again. Through the MCP, secrets go in by file path only, deleting or replacing needs
+\`confirm: true\`, and no token is ever returned.
+
+## Run everything locally
+
+To run the framework without this server, clone the engine and install it:
+\`pip install "anytest-framework[host,web] @ git+https://github.com/devfilipe/anytest-framework"\`,
+then \`atf web\` or \`atf run --bench … --suite …\` (needs \`nmap\` and \`ping\` on the host).
+`; }
+function renderHelp(m){
+  m.innerHTML=`<div class="panel"><div class="sec-title">Help</div><div class="md">${md(_helpMd())}</div></div>`;
+}
 function renderDocs(m){
   m.innerHTML=`<div class="panel"><div class="sec-title">Documentation</div>`
     +_docSection("1 · Architectural principles",_DOC_PRINCIPLES,true)
@@ -2526,7 +2608,7 @@ function applyNavRole(){
   const rootAdmin = ADMIN_USER==="admin";
   document.querySelectorAll("#nav button").forEach(b=>{
     const t=b.dataset.t;
-    const show = ADMIN_TABS.includes(t) ? ADMIN_IS : (rootAdmin ? (t==="activity") : true);
+    const show = ADMIN_TABS.includes(t) ? ADMIN_IS : (rootAdmin ? (t==="activity"||t==="help") : true);
     b.style.display = show ? "" : "none";
   });
   document.querySelectorAll("#nav .nav-group").forEach(g=>{        // hide a label whose items are all hidden
@@ -2587,6 +2669,7 @@ const TOUR=[                                                     // a step shows
   {tab:"run",title:"Run",text:"Pick a suite or tests, a bench and boards, and run. A connected agent can supply your uncommitted tests."},
   {tab:"reports",title:"Reports",text:"Every run: verdict per test and board, the requirement roll-up and the raw evidence each probe saw."},
   {tab:"ad-agents",title:"Agents",text:"Your machine joins with `atf agent`: it lends its check repositories to the server. `atf remote` and `atf mcp` drive the same API from a terminal or an AI client."},
+  {tab:"help",title:"Help",text:"What each page does, how to wire RESTCONF with mutual TLS, and how to use the framework from your machine: the agent, atf.pyz (terminal) and the MCP."},
   {tab:"activity",title:"Activity",text:"Who is signed in, which agents are connected and what is running right now."},
   {tab:"ad-users",title:"Users",text:"Local accounts. The admin flag opens this Admin area; the built-in admin only administers and runs nothing."},
   {tab:"ad-repos",title:"Repositories",text:"Check repositories the server clones and syncs itself, next to the ones agents lend."},
