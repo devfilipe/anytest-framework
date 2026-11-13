@@ -90,3 +90,34 @@ def test_bench_list_names_the_benches_and_logout_forgets_the_session(server, con
     assert not (config_dir / "session.json").exists()
     assert main(["remote", "bench", "list"]) == 1
     assert "atf remote login" in capsys.readouterr().err
+
+
+def test_driver_set_changes_one_driver_and_keeps_the_rest_of_the_bench(server, config_dir, monkeypatch, capsys):
+    from atf.cli import main
+    _login(server, monkeypatch)
+
+    assert main(["remote", "driver", "set", "lab", "board-1", "mgmt", "--prop", "ip=192.0.2.9",
+                 "--restconf", "scheme=https", "--restconf", "role=monitor", "--restconf", "port=8443",
+                 "--restconf", "cert_ref=c", "--restconf", "key_ref=k", "--restconf", "ca_ref=ca"]) == 0
+    capsys.readouterr()
+    main(["remote", "bench", "get", "lab"])
+    board = json.loads(capsys.readouterr().out)["boards"][0]
+
+    assert board["drivers"]["mgmt"]["ip"] == "192.0.2.9"
+    assert board["drivers"]["mgmt"]["restconf"] == {"scheme": "https", "role": "monitor", "port": 8443,
+                                                    "cert_ref": "c", "key_ref": "k", "ca_ref": "ca"}
+    assert board["name"] == "board-1" and board["model"] == "router-x"
+
+    assert main(["remote", "driver", "set", "lab", "board-1", "mgmt", "--no-restconf"]) == 0
+    capsys.readouterr()
+    main(["remote", "bench", "get", "lab"])
+    assert "restconf" not in json.loads(capsys.readouterr().out)["boards"][0]["drivers"]["mgmt"]
+
+
+def test_driver_set_on_an_unknown_board_is_an_error(server, config_dir, monkeypatch, capsys):
+    from atf.cli import main
+    _login(server, monkeypatch)
+    capsys.readouterr()
+
+    assert main(["remote", "driver", "set", "lab", "board-x", "mgmt", "--prop", "ip=192.0.2.9"]) == 1
+    assert "board-x" in capsys.readouterr().err

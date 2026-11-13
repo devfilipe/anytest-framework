@@ -113,6 +113,35 @@ def bench_put(name: str, file: str) -> None:
     print(f"bench {name} written")
 
 
+def _pairs(items: list[str], what: str) -> dict:
+    """`k=v` options as a dict; an all-digit value is a number (ports)."""
+    out = {}
+    for item in items or []:
+        if "=" not in item:
+            raise RemoteError(f"{what} {item!r}: expected key=value")
+        k, v = item.split("=", 1)
+        out[k.strip()] = int(v) if v.strip().isdigit() else v.strip()
+    return out
+
+
+def driver_set(bench: str, board: str, alias: str, props: list[str], restconf: list[str], no_restconf: bool) -> None:
+    """Change one driver of one board of a bench (its props and its `restconf` block), keeping the rest
+    of the bench as the server has it."""
+    q = urllib.request.quote(bench)
+    data = _api("GET", f"/api/benches/{q}")
+    target = next((b for b in data.get("boards") or [] if b.get("name") == board), None)
+    if target is None:
+        raise RemoteError(f"bench {bench} has no board {board}")
+    drv = target.setdefault("drivers", {}).setdefault(alias, {"driver_name": "ip"})
+    drv.update(_pairs(props, "--prop"))
+    if no_restconf:
+        drv.pop("restconf", None)
+    elif restconf:
+        drv["restconf"] = {**(drv.get("restconf") or {}), **_pairs(restconf, "--restconf")}
+    _api("PUT", f"/api/benches/{q}", {"agents": data.get("agents") or {}, "boards": data["boards"]})
+    print(f"driver {alias} of {board} in bench {bench} written")
+
+
 def secret_set(bench: str, ref: str, file: str) -> None:
     """Store one secret of a bench from a file (a PEM, a password file); the value is never printed."""
     try:
@@ -138,6 +167,16 @@ def add_parser(sub) -> None:
     bw = bs.add_parser("put", help="write a bench from a YAML or JSON file (replaces it)")
     bw.add_argument("name")
     bw.add_argument("file")
+    dp = rs.add_parser("driver", help="change one driver of a board in a bench")
+    ds = dp.add_subparsers(dest="driver_cmd", required=True)
+    dset = ds.add_parser("set", help="set props and the restconf (mTLS) block of a driver")
+    dset.add_argument("bench")
+    dset.add_argument("board")
+    dset.add_argument("alias", help="the driver alias (mgmt, console, craft, …)")
+    dset.add_argument("--prop", action="append", default=[], help="key=value of the driver (repeatable), e.g. ip=192.0.2.1")
+    dset.add_argument("--restconf", action="append", default=[],
+                      help="key=value of the restconf block (repeatable): scheme, port, role, cert_ref, key_ref, ca_ref")
+    dset.add_argument("--no-restconf", action="store_true", help="remove the restconf block")
     sp = rs.add_parser("secret", help="write a bench secret on the server (encrypted at rest there)")
     ss = sp.add_subparsers(dest="secret_cmd", required=True)
     st = ss.add_parser("set", help="set one secret from a file; the value is never printed")
@@ -158,6 +197,8 @@ def run(args) -> int:
             bench_get(args.name)
         elif args.remote_cmd == "bench" and args.bench_cmd == "put":
             bench_put(args.name, args.file)
+        elif args.remote_cmd == "driver" and args.driver_cmd == "set":
+            driver_set(args.bench, args.board, args.alias, args.prop, args.restconf, args.no_restconf)
         elif args.remote_cmd == "secret" and args.secret_cmd == "set":
             secret_set(args.bench, args.ref, args.file)
         return 0
