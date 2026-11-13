@@ -41,6 +41,23 @@
   h1{font-size:15px;margin:0;font-weight:600} .meta{color:var(--mut);font-size:12px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle}
   .dot.ok{background:var(--pass)} .dot.danger{background:var(--gap)} .dot.muted{background:var(--na)}
+  .dot.warn{background:var(--err)}
+  /* bench health: one dot per board driver */
+  .hdots{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:220px}
+  .hdots .dot{width:10px;height:10px;cursor:help}
+  .hdots .dot.pending{background:var(--na);opacity:.35;animation:hpulse 1.2s ease-in-out infinite}
+  @keyframes hpulse{50%{opacity:.85}}
+  .rc-box{margin-top:9px;padding:9px 10px;border:1px dashed var(--line);border-radius:var(--radius)}
+  /* animated walkthrough */
+  #tour-spot{position:fixed;z-index:80;border-radius:10px;pointer-events:none;box-shadow:0 0 0 9999px rgb(0 0 0 / .62),0 0 0 3px var(--acc);
+    transition:top .45s cubic-bezier(.2,.8,.2,1),left .45s cubic-bezier(.2,.8,.2,1),width .45s cubic-bezier(.2,.8,.2,1),height .45s cubic-bezier(.2,.8,.2,1)}
+  #tour-card{position:fixed;z-index:81;width:330px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px 18px;box-shadow:0 12px 32px rgb(0 0 0 / .35);transition:top .45s cubic-bezier(.2,.8,.2,1),left .45s cubic-bezier(.2,.8,.2,1)}
+  #tour-card.enter{animation:tourin .35s ease-out}
+  @keyframes tourin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  #tour-card h3{margin:0 0 6px;font-size:15px} #tour-card p{margin:0 0 12px;color:var(--mut)}
+  .tour-dots{display:flex;gap:5px} .tour-dots i{width:7px;height:7px;border-radius:50%;background:var(--line)} .tour-dots i.on{background:var(--acc)}
+  @media (prefers-reduced-motion: reduce){#tour-spot,#tour-card{transition:none}#tour-card.enter,.hdots .dot.pending{animation:none}}
   .badge{display:inline-flex;align-items:center;gap:4px;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.02em}
   .badge.ok{background:rgb(var(--c-ok) / .15);color:var(--pass)}
   .badge.danger{background:rgb(var(--c-danger) / .15);color:var(--gap)}
@@ -157,6 +174,7 @@
     </nav>
     <div class="side-foot" style="flex-direction:column;align-items:stretch;gap:6px">
       <div id="side-user" class="muted" style="font-size:12px"></div>
+      <button class="btn-ghost" onclick="tourStart()" style="width:100%" title="a guided tour of the dashboard">🧭 tour</button>
       <div class="row" style="margin:0;gap:8px;align-items:center;flex-wrap:nowrap"><button class="btn-ghost" onclick="adminLogout()" style="flex:1" title="sign out">⎋ sign out</button><button id="themebtn" class="btn-ghost" style="flex:1;width:auto" title="toggle theme (dark / light)">◐ theme</button></div>
       <span id="fw-ver" class="muted" style="font-size:11px" title="framework version"></span></div>
   </aside>
@@ -378,11 +396,17 @@ async function loadSecretsAdmin(bench){
   let h='<table style="margin-top:6px"><tr><th>Ref</th><th>Value</th><th></th></tr>';
   sec.refs.forEach(ref=>h+=`<tr><td class="req">${esc(ref)}</td><td class="muted">•••••• (encrypted)</td><td><a onclick="delSecretAdmin('${esc(bench)}','${esc(ref)}')" style="color:var(--gap)">delete</a></td></tr>`);
   h+=(sec.refs.length?'':'<tr><td colspan="3" class="muted">no secrets</td></tr>')+'</table>';
-  h+=`<div class="row" style="margin-top:10px"><input class="f" id="sa-k" placeholder="ref (e.g. root)" style="width:150px"><input class="f" id="sa-v" placeholder="value" type="password" style="width:200px"><button class="act" onclick="setSecretAdmin('${esc(bench)}')">Set secret</button> <span id="sa-msg" class="muted"></span></div>`;
+  h+=`<div class="row" style="margin-top:10px"><input class="f" id="sa-k" placeholder="ref (e.g. root)" style="width:150px"><input class="f" id="sa-v" placeholder="value" type="password" style="width:200px"><label class="btn-ghost" style="cursor:pointer;padding:7px 10px" title="read the value from a file (a PEM certificate or key) — it stays in this browser until you set it, and is never shown">📄 from file<input type="file" id="sa-file" style="display:none" onchange="secretFromFile(this)"></label><button class="act" onclick="setSecretAdmin('${esc(bench)}')">Set secret</button> <span id="sa-msg" class="muted"></span></div>`;
   box.innerHTML=h;
 }
+let SECRET_FILE=null;                                          // {name, text} read by "from file" (multi-line PEM)
+function secretFromFile(inp){ const f=inp.files&&inp.files[0]; if(!f) return;
+  const rd=new FileReader(); rd.onload=()=>{ SECRET_FILE={name:f.name,text:String(rd.result)}; $("#sa-v").value=""; $("#sa-v").disabled=true;
+    $("#sa-v").placeholder=f.name+" ("+SECRET_FILE.text.length+" chars)"; if(!($("#sa-k").value||"").trim()) $("#sa-k").value=f.name.replace(/\.[^.]+$/,""); };
+  rd.readAsText(f); }
 async function setSecretAdmin(bench){ const k=($("#sa-k").value||"").trim(); if(!k){return;}
-  await adminFetch("/api/benches/"+encodeURIComponent(bench)+"/secrets",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({secrets:{[k]:$("#sa-v").value}})});
+  const val=SECRET_FILE?SECRET_FILE.text:$("#sa-v").value; SECRET_FILE=null;
+  await adminFetch("/api/benches/"+encodeURIComponent(bench)+"/secrets",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({secrets:{[k]:val}})});
   loadSecretsAdmin(bench); }
 async function delSecretAdmin(bench,ref){ if(!confirm("Delete secret "+ref+"?"))return; await adminFetch(`/api/benches/${encodeURIComponent(bench)}/secrets/${encodeURIComponent(ref)}`,{method:"DELETE"}); loadSecretsAdmin(bench); }
 async function renderModelsAdmin(m){
@@ -886,10 +910,20 @@ async function forceUnlock(res){ if(!await ensureAdmin())return; if(!confirm("Fo
 async function renderBenches(m){
   const benches=await j("/api/benches");
   let h='<div class="panel"><div class="sec-title">Benches · SQLite store (secrets encrypted)</div><button class="act" onclick="editBench(null)">+ New bench</button>';
-  h+='<table style="margin-top:12px"><tr><th>Name</th><th>Nodes</th><th>Boards</th><th>Secrets</th><th>Updated</th><th></th></tr>';
-  benches.forEach(b=>h+=`<tr><td class="req">${esc(b.name)}</td><td>${b.agents}</td><td>${b.boards}</td><td>${b.secrets}</td><td class="muted">${esc(b.updated_at||"")}</td><td>${acts(`editBench('${esc(b.name)}')`,`viewBench('${esc(b.name)}')`,`/api/benches/${encodeURIComponent(b.name)}/export`)} · <a onclick="delBench('${esc(b.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
-  h+=(benches.length?'':'<tr><td colspan="6" class="muted">none</td></tr>')+'</table></div>';
+  h+='<table style="margin-top:12px"><tr><th>Name</th><th id="bh-health">Health '+hlp("One dot per board driver: does the server reach what it points at (ICMP + TCP connect, never a login). Green = the port answers; amber = only ping does; red = no answer. Hover a dot for the reason; ⟳ probes again (results are cached 60 s).")+'</th><th>Nodes</th><th>Boards</th><th>Secrets</th><th>Updated</th><th></th></tr>';
+  benches.forEach(b=>h+=`<tr><td class="req">${esc(b.name)}</td><td><span class="hdots" id="bh-${cssid(b.name)}"><span class="dot pending"></span></span> <a onclick="loadBenchHealth(true)" title="probe again">⟳</a></td><td>${b.agents}</td><td>${b.boards}</td><td>${b.secrets}</td><td class="muted">${esc(b.updated_at||"")}</td><td>${acts(`editBench('${esc(b.name)}')`,`viewBench('${esc(b.name)}')`,`/api/benches/${encodeURIComponent(b.name)}/export`)} · <a onclick="delBench('${esc(b.name)}')" style="color:var(--gap)">delete</a></td></tr>`);
+  h+=(benches.length?'':'<tr><td colspan="7" class="muted">none</td></tr>')+'</table></div>';
   m.innerHTML=h;
+  loadBenchHealth(false);
+}
+async function loadBenchHealth(refresh){
+  document.querySelectorAll(".hdots").forEach(el=>el.innerHTML='<span class="dot pending"></span>');
+  let hl={}; try{ hl=await j("/api/benches/health"+(refresh?"?refresh=1":"")); }catch(e){ return; }
+  const cls={ok:"ok",degraded:"warn",down:"danger"};
+  Object.entries(hl).forEach(([bench,boards])=>{ const el=document.getElementById("bh-"+cssid(bench)); if(!el) return;
+    const dots=Object.entries(boards||{}).flatMap(([board,drv])=>Object.entries(drv||{}).map(([alias,s])=>
+      `<span class="dot ${cls[s.status]||'muted'}" title="${esc(board)} · ${esc(alias)}: ${esc(s.status)}${s.target?' ('+esc(s.target)+')':''} — ${esc(s.reason||'')}"></span>`));
+    el.innerHTML=dots.join("")||'<span class="muted" style="font-size:11px">no drivers</span>'; });
 }
 async function renderSuites(m){
   const suites=await j("/api/suites");
@@ -1195,8 +1229,9 @@ let MODELS=[], INV_AGENTS=[], INV_BOARDS=[], INV_DRIVERS=[], ACTION_CAT=[];
 async function editBench(name){
   CFGNAME=name;
   [MODELS,INV_AGENTS,INV_BOARDS,INV_DRIVERS,ACTION_CAT]=await Promise.all([j("/api/board-models"),j("/api/inventory/agents"),j("/api/inventory/boards"),j("/api/inventory/drivers"),j("/api/actions/catalog")]);
-  CFG = name ? apiToCfg(await j("/api/benches/"+encodeURIComponent(name)))
-             : {_name:"",_models:MODELS,agents:[],boards:[]};
+  const _raw = name ? await j("/api/benches/"+encodeURIComponent(name)) : null;
+  CFG = _raw ? apiToCfg(_raw) : {_name:"",_models:MODELS,agents:[],boards:[]};
+  CFG._refs = (_raw && _raw.secret_refs) || [];               // for the RESTCONF certificate selects
   if(name) CFG._name=name;
   reRenderBench();
 }
@@ -1245,6 +1280,7 @@ function driverBlock(i){ const ds=CFG.boards[i].drivers||[];
       h+=`</div>`;
     } else if(d.driver_name){ h+=`<div class="muted" style="margin-top:6px;font-size:11px">unknown type “${esc(d.driver_name)}” — no props</div>`; }
     else { h+=`<div class="muted" style="margin-top:6px;font-size:11px">pick a type to configure its props</div>`; }
+    if(d.driver_name==='ip') h+=restconfBlock(i,di,d);
     h+=`</div>`;
   });
   const avail=(INV_DRIVERS||[]);
@@ -1254,6 +1290,29 @@ function driverBlock(i){ const ds=CFG.boards[i].drivers||[];
 function addDriver(i,dname){ if(!dname)return; CFG.boards[i].drivers.push({alias:"",driver_name:dname,vals:{}}); reRenderBench(); }
 function setDriverType(i,di,dname){ const d=CFG.boards[i].drivers[di]; d.driver_name=dname; reRenderBench(); }
 function setDriverVal(i,di,k,v){ const d=CFG.boards[i].drivers[di]; d.vals=d.vals||{}; d.vals[k]=v; }
+// the `restconf` block of an ip driver: how ctx.<alias>.restconf_get reaches the board — HTTPS with a
+// client certificate (mutual TLS) whose cert/key/CA are bench secrets named here, or HTTP with the
+// role's password
+function restconfBlock(i,di,d){ const rc=(d.vals||{}).restconf; const on=rc&&typeof rc==='object';
+  let h=`<div class="rc-box"><label style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" ${on?'checked':''} onchange="toggleRestconf(${i},${di},this.checked)"> <b>RESTCONF</b> ${hlp("Lets tests read the board over RESTCONF (ctx.<alias>.restconf_get). HTTPS with a client certificate = mutual TLS: pick the bench secrets holding the certificate, its private key and the CA chain (set them under Secrets, from a file). HTTP uses the role's password.")}</label>`;
+  if(!on) return h+`</div>`;
+  const refOpts=sel=>`<option value="">—</option>`+(CFG._refs||[]).map(r=>`<option ${r===sel?'selected':''}>${esc(r)}</option>`).join("");
+  const fld=(k,label,inner)=>`<div class="field" style="margin:0;min-width:120px"><label>${label}</label>${inner}</div>`;
+  h+=`<div class="wire-props" style="border:none;margin-top:6px;padding-top:0">`
+    +fld('scheme','scheme',`<select class="f" onchange="setRestconf(${i},${di},'scheme',this.value)">${['https','http'].map(s=>`<option ${(rc.scheme||'https')===s?'selected':''}>${s}</option>`).join("")}</select>`)
+    +fld('port','port',`<input class="f" type="number" min="1" style="width:90px" value="${esc(rc.port||'')}" placeholder="${(rc.scheme||'https')==='https'?443:80}" oninput="setRestconf(${i},${di},'port',this.value?parseInt(this.value):'')">`)
+    +fld('role','role',`<input class="f" value="${esc(rc.role||'')}" placeholder="monitor" oninput="setRestconf(${i},${di},'role',this.value)">`);
+  if((rc.scheme||'https')==='https') h+=fld('cert_ref','client cert',`<select class="f" onchange="setRestconf(${i},${di},'cert_ref',this.value)">${refOpts(rc.cert_ref)}</select>`)
+    +fld('key_ref','client key',`<select class="f" onchange="setRestconf(${i},${di},'key_ref',this.value)">${refOpts(rc.key_ref)}</select>`)
+    +fld('ca_ref','CA chain',`<select class="f" onchange="setRestconf(${i},${di},'ca_ref',this.value)">${refOpts(rc.ca_ref)}</select>`);
+  h+=`</div>`;
+  if(!(CFG._refs||[]).length && (rc.scheme||'https')==='https') h+=`<div class="muted" style="font-size:11px;margin-top:6px">no secrets on this bench yet — add the certificate, key and CA under Secrets (save the bench first)</div>`;
+  return h+`</div>`; }
+function toggleRestconf(i,di,on){ const d=CFG.boards[i].drivers[di]; d.vals=d.vals||{};
+  if(on) d.vals.restconf=d.vals.restconf&&typeof d.vals.restconf==='object'?d.vals.restconf:{scheme:"https",role:"monitor"};
+  else delete d.vals.restconf; reRenderBench(); }
+function setRestconf(i,di,k,v){ const d=CFG.boards[i].drivers[di]; const rc=d.vals.restconf;
+  if(v===''||v===null) delete rc[k]; else rc[k]=v; if(k==='scheme') reRenderBench(); }
 function rmDriver(i,di){ CFG.boards[i].drivers.splice(di,1); reRenderBench(); }
 function actionBlock(i){ const as=CFG.boards[i].actions||[];
   const configured=new Set(as.map(a=>a.name)), avail=(ACTION_CAT||[]).filter(a=>!configured.has(a.name));
@@ -2487,6 +2546,7 @@ async function boot(){
   applyNavRole();
   document.querySelectorAll("#nav button").forEach(b=>b.onclick=()=>render(b.dataset.t));
   render(ADMIN_USER==="admin" ? "ad-users" : "reports");     // the admin account lands in its Admin area
+  tourFirstVisit();
 }
 async function loadVersion(){
   const el=document.getElementById("fw-ver"); if(!el) return;
@@ -2516,6 +2576,63 @@ function showLogin(){
   };
   const pw=document.getElementById("li-pass"); if(pw) pw.focus();
 }
+// ---- animated walkthrough: a spotlight that glides from one part of the dashboard to the next ----
+const TOUR=[                                                     // a step shows only if its menu item is visible to this user
+  {tab:"st-inventory",title:"Inventory",text:"The shared catalogue: agents (the nodes that reach a board), boards, and the driver and action types a bench wires together."},
+  {tab:"st-benches",title:"Benches",text:"A bench wires inventory boards to drivers (mgmt, console, craft…) under an alias — the name a test asks for."},
+  {tab:"st-benches",sel:"#bh-health",title:"Driver health",text:"One dot per board driver: green when the server reaches its port, amber when only ping answers, red when nothing does. Hover for the reason, ⟳ to probe again."},
+  {tab:"st-benches",title:"Drivers and mTLS",text:"Edit a bench: an ip driver can carry a RESTCONF block — HTTPS with a client certificate (mutual TLS) taken from the bench secrets, so tests read the board's state."},
+  {tab:"ad-secrets",title:"Secrets",text:"Passwords, certificates and keys, encrypted at rest and never shown again. Load a PEM from a file; benches refer to it by name."},
+  {tab:"st-suites",title:"Suites",text:"The requirement → test map: which tests evidence each requirement, in run order, with a fallback when no test applies."},
+  {tab:"run",title:"Run",text:"Pick a suite or tests, a bench and boards, and run. A connected agent can supply your uncommitted tests."},
+  {tab:"reports",title:"Reports",text:"Every run: verdict per test and board, the requirement roll-up and the raw evidence each probe saw."},
+  {tab:"ad-agents",title:"Agents",text:"Your machine joins with `atf agent`: it lends its check repositories to the server. `atf remote` and `atf mcp` drive the same API from a terminal or an AI client."},
+  {tab:"activity",title:"Activity",text:"Who is signed in, which agents are connected and what is running right now."},
+  {tab:"ad-users",title:"Users",text:"Local accounts. The admin flag opens this Admin area; the built-in admin only administers and runs nothing."},
+  {tab:"ad-repos",title:"Repositories",text:"Check repositories the server clones and syncs itself, next to the ones agents lend."},
+  {tab:"ad-models",title:"Board models",text:"The models boards can be, so tests written for a model run only on its boards."},
+  {tab:"ad-backup",title:"Backup",text:"A consistent snapshot of the whole store, and restoring one."},
+];
+let TOUR_I=-1;
+function tourEnd(){ TOUR_I=-1; ["tour-spot","tour-card"].forEach(id=>{const el=document.getElementById(id); if(el) el.remove();});
+  try{ localStorage.setItem("atf-tour-seen","1"); }catch(e){} }
+const tourNav=st=>document.querySelector(`#nav button[data-t="${st.tab}"]`);
+const tourVisible=st=>{ const b=tourNav(st); return !!(b && b.offsetParent!==null && b.getClientRects().length); };
+async function tourShow(dir=1){
+  while(TOUR[TOUR_I] && !tourVisible(TOUR[TOUR_I])) TOUR_I+=dir;   // skip what this user can't see
+  const st=TOUR[TOUR_I]; if(!st) return tourEnd();
+  if(!document.querySelector(`#nav button.on[data-t="${st.tab}"]`)){ try{ await render(st.tab); }catch(e){} }
+  const el=(st.sel&&document.querySelector(st.sel))||tourNav(st);
+  el.scrollIntoView({block:"nearest"});
+  let spot=document.getElementById("tour-spot"), card=document.getElementById("tour-card");
+  if(!spot){ spot=document.createElement("div"); spot.id="tour-spot"; document.body.appendChild(spot); }
+  if(!card){ card=document.createElement("div"); card.id="tour-card"; card.setAttribute("role","dialog"); document.body.appendChild(card); }
+  const r=el.getBoundingClientRect(), pad=6;
+  Object.assign(spot.style,{top:(r.top-pad)+"px",left:(r.left-pad)+"px",width:(r.width+2*pad)+"px",height:(r.height+2*pad)+"px"});
+  card.innerHTML=`<h3>${esc(st.title)}</h3><p>${esc(st.text)}</p>`
+    +`<div class="tour-dots" style="margin-bottom:12px">${TOUR.map((s,k)=>tourVisible(s)?`<i class="${k===TOUR_I?'on':''}"></i>`:'').join("")}</div>`
+    +`<div class="row" style="margin:0;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:nowrap">`
+    +`<button class="btn-ghost" onclick="tourEnd()">skip</button>${TOUR_I?'<button class="btn-ghost" onclick="tourStep(-1)">back</button>':''}`
+    +`<button class="act" onclick="tourStep(1)">${TOUR.slice(TOUR_I+1).some(tourVisible)?'next':'done'}</button></div>`;
+  card.classList.remove("enter"); void card.offsetWidth; card.classList.add("enter");
+  const cw=card.offsetWidth||330, ch=card.offsetHeight||150, vw=innerWidth, vh=innerHeight;
+  let left=r.right+16, top=r.top;                                  // right of the target, else below
+  if(left+cw>vw-12){ left=Math.max(12,Math.min(vw-cw-12,r.left)); top=r.bottom+14; }
+  if(top+ch>vh-12) top=Math.max(12,r.top-ch-14);
+  Object.assign(card.style,{left:left+"px",top:top+"px"});
+}
+function tourStep(d){ const from=TOUR_I; TOUR_I+=d;
+  if(d<0){ while(TOUR_I>=0 && !tourVisible(TOUR[TOUR_I])) TOUR_I--; if(TOUR_I<0){ TOUR_I=from; return; } }
+  if(TOUR_I>=TOUR.length) return tourEnd(); tourShow(d<0?-1:1); }
+document.addEventListener("keydown",e=>{ if(TOUR_I<0) return;
+  if(e.key==="Escape"){ e.stopImmediatePropagation(); tourEnd(); }
+  else if(e.key==="ArrowRight"||e.key==="Enter"){ e.preventDefault(); tourStep(1); }
+  else if(e.key==="ArrowLeft"){ e.preventDefault(); tourStep(-1); } }, true);
+addEventListener("resize",()=>{ if(TOUR_I>=0) tourShow(); });
+function tourStart(){ TOUR_I=0; tourShow(1); }
+function tourFirstVisit(){ let seen=false; try{ seen=!!localStorage.getItem("atf-tour-seen"); }catch(e){ seen=true; }
+  if(!seen) setTimeout(tourStart,700); }
+
 initTheme();
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDrill();closeModal();}});
 boot();
