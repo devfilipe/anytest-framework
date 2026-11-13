@@ -97,11 +97,16 @@ def main(argv=None) -> int:
 
     from atf import remote
     remote.add_parser(sub)
+    sub.add_parser("mcp", help="MCP server (stdio) for a running atf server — uses the `atf remote login` session")
 
     args = ap.parse_args(argv)
 
     if args.cmd == "remote":
         return remote.run(args)
+
+    if args.cmd == "mcp":
+        from atf import mcp
+        return mcp.run()
 
     if args.cmd == "_mgmt-worker":
         import sys

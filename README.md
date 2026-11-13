@@ -112,13 +112,33 @@ restart the service.
 
 ```bash
 atf remote login --server http://192.0.2.10:8899 --user admin   # asks for the password (no echo)
+atf remote bench list                                            # the bench names
 atf remote bench get lab > lab.json                              # a bench as JSON
 atf remote bench put lab lab.yaml                                # write it back (YAML or JSON)
 atf remote secret set lab board1_ca --file ca.pem                # a secret from a file, never printed
 ```
 
 Only the session token is kept, in `~/.config/atf/session.json` (owner-only; `ATF_CONFIG_DIR`
-moves it). The server holds tokens in memory, so a restart asks for `atf remote login` again.
+moves it). The server holds tokens in memory, so a restart asks for `atf remote login` again;
+`atf remote logout` forgets it.
+
+### MCP
+
+`atf mcp` is an MCP server (stdio) over the same session, for an AI client to do anything the API
+does:
+
+```bash
+atf remote login --server http://192.0.2.10:8899 --user admin
+claude mcp add atf -- atf mcp
+```
+
+Each API area is one tool (`atf_api_benches`, `atf_api_inventory`, `atf_api_run`, …) whose `op` is
+an operation such as `GET /api/benches/{name}`, listed from the server's `/api/openapi.json` when the
+MCP starts, so new endpoints show up without a change here. The guided flows (`atf_run`,
+`atf_report`, `atf_map`, `atf_testplan`, `atf_scaffold`, …) are offered alongside. Secrets go in as
+`{ref: file path}` and never come back in clear; deleting, restoring, rotating a token or changing
+users needs `confirm: true`; responses never carry a token. The session login, the agent wire
+protocol and the run event stream are not tools.
 
 ## Concepts
 
