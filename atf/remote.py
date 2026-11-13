@@ -48,7 +48,7 @@ def _load_session() -> dict:
         raise RemoteError("no session: run `atf remote login --server URL --user NAME` first") from None
 
 
-def _call(server: str, method: str, path: str, body=None, token: str = ""):
+def _call(server: str, method: str, path: str, body=None, token: str = "", raw: bool = False):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(server.rstrip("/") + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
@@ -56,7 +56,8 @@ def _call(server: str, method: str, path: str, body=None, token: str = ""):
         req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read() or b"null")
+            data = r.read()
+            return data if raw else json.loads(data or b"null")
     except urllib.error.HTTPError as e:
         with e:
             detail = e.read().decode("utf-8", "replace")[:300]
@@ -65,10 +66,10 @@ def _call(server: str, method: str, path: str, body=None, token: str = ""):
         raise RemoteError(f"cannot reach {server}: {e.reason}") from None
 
 
-def _api(method: str, path: str, body=None):
+def _api(method: str, path: str, body=None, raw: bool = False):
     s = _load_session()
     try:
-        return _call(s["server"], method, path, body, s["token"])
+        return _call(s["server"], method, path, body, s["token"], raw)
     except RemoteError as e:
         if e.status == 401:           # tokens live in the server's memory: a restart drops them
             raise RemoteError(f"session expired on {s['server']}: run `atf remote login --server "
@@ -159,6 +160,58 @@ def secret_set(bench: str, ref: str, file: str) -> None:
     print(f"secret {ref} of bench {bench} written ({len(value)} characters)")
 
 
+def run_start(bench: str, boards: list[str], suite: str, ids: list[str], mgmt_backend: str,
+              wait: bool, timeout: float) -> None:
+    """Start a run on the server; with `wait`, follow it to the end and print its run id and records."""
+    import time
+    body = {"bench": bench, "mgmt_backend": mgmt_backend}
+    if boards:
+        body["board"] = boards
+    if suite:
+        body["suite"] = suite
+    if ids:
+        body["ids"] = ids
+    r = _api("POST", "/api/run", body)
+    if not r.get("started"):
+        raise RemoteError(r.get("error") or "the run did not start")
+    if not wait:
+        print("run started (follow it with the dashboard, or pass --wait)")
+        return
+    deadline = time.time() + timeout
+    while True:
+        status = _api("GET", "/api/run/status")
+        if not status.get("active"):
+            break
+        if time.time() > deadline:
+            raise RemoteError(f"still running after {int(timeout)} s; it goes on — see the dashboard")
+        time.sleep(1)
+    last = status.get("last") or {}
+    if last.get("type") == "error":
+        raise RemoteError(f"run failed: {last.get('message', '')}")
+    run_id = last.get("run_id")
+    if not run_id:
+        raise RemoteError(last.get("note") or "the run ended without a run id")
+    print(f"{run_id}  {json.dumps(last.get('counts') or {})}" + (f"  — {last['note']}" if last.get("note") else ""))
+    for rec in (_api("GET", f"/api/reports/{run_id}/export").get("records") or []):
+        print(f"  {rec.get('check', '?'):28} {rec.get('board', '?'):20} {rec.get('verdict', '?')}")
+
+
+def report_download(run_id: str, out: str) -> None:
+    """Write a run's folder — results.json, run-meta.json, evidence/, report — into `out`."""
+    import io
+    import zipfile
+    data = _api("GET", f"/api/reports/{urllib.request.quote(run_id)}/download", raw=True)
+    dest = Path(out).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for name in z.namelist():
+            target = (dest / name).resolve()
+            if dest not in target.parents and target != dest:        # never write outside `out`
+                raise RemoteError(f"refusing {name!r}: it points outside {out}")
+        z.extractall(dest)
+    print(f"run {run_id} written to {dest}")
+
+
 def add_parser(sub) -> None:
     rp = sub.add_parser("remote", help="talk to a running atf server (login, benches, secrets)")
     rs = rp.add_subparsers(dest="remote_cmd", required=True)
@@ -184,6 +237,19 @@ def add_parser(sub) -> None:
     dset.add_argument("--restconf", action="append", default=[],
                       help="key=value of the restconf block (repeatable): scheme, port, role, cert_ref, key_ref, ca_ref")
     dset.add_argument("--no-restconf", action="store_true", help="remove the restconf block")
+    rp = rs.add_parser("run", help="start a run on the server (a suite or test ids, on a bench)")
+    rp.add_argument("--bench", required=True)
+    rp.add_argument("--board", action="append", default=[], help="board to run on (repeatable; default: all)")
+    rp.add_argument("--suite", default="", help="a saved suite")
+    rp.add_argument("--id", action="append", default=[], dest="ids", help="a test id (repeatable)")
+    rp.add_argument("--mgmt-backend", default="local", choices=["local", "docker"])
+    rp.add_argument("--wait", action="store_true", help="follow the run and print its id and records")
+    rp.add_argument("--timeout", type=float, default=3600, help="seconds to wait with --wait")
+    rep = rs.add_parser("report", help="the reports of runs")
+    repc = rep.add_subparsers(dest="report_cmd", required=True)
+    rd = repc.add_parser("download", help="write a run's folder (results, run-meta, evidence) to a directory")
+    rd.add_argument("run_id")
+    rd.add_argument("--out", required=True)
     sp = rs.add_parser("secret", help="write a bench secret on the server (encrypted at rest there)")
     ss = sp.add_subparsers(dest="secret_cmd", required=True)
     st = ss.add_parser("set", help="set one secret from a file; the value is never printed")
@@ -206,6 +272,12 @@ def run(args) -> int:
             bench_put(args.name, args.file)
         elif args.remote_cmd == "driver" and args.driver_cmd == "set":
             driver_set(args.bench, args.board, args.alias, args.prop, args.restconf, args.no_restconf)
+        elif args.remote_cmd == "run":
+            if not (args.suite or args.ids):
+                raise RemoteError("give --suite or at least one --id")
+            run_start(args.bench, args.board, args.suite, args.ids, args.mgmt_backend, args.wait, args.timeout)
+        elif args.remote_cmd == "report" and args.report_cmd == "download":
+            report_download(args.run_id, args.out)
         elif args.remote_cmd == "secret" and args.secret_cmd == "set":
             secret_set(args.bench, args.ref, args.file)
         return 0

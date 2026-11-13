@@ -121,3 +121,37 @@ def test_driver_set_on_an_unknown_board_is_an_error(server, config_dir, monkeypa
 
     assert main(["remote", "driver", "set", "lab", "board-x", "mgmt", "--prop", "ip=192.0.2.9"]) == 1
     assert "board-x" in capsys.readouterr().err
+
+
+def _local_bench(store):
+    store.upsert_bench("loop", {"agents": {}, "boards": [
+        {"name": "board-1", "model": "", "serial": "1", "creds": {},
+         "drivers": {"mgmt": {"driver_name": "ip", "ip": "127.0.0.1"}}}]})
+
+
+def test_run_waits_and_report_download_writes_the_run_folder(server, config_dir, monkeypatch, capsys, store, tmp_path):
+    from atf.cli import main
+    _local_bench(store)
+    _login(server, monkeypatch)
+    capsys.readouterr()
+
+    assert main(["remote", "run", "--bench", "loop", "--board", "board-1", "--id", "host-recon", "--wait"]) == 0
+    out = capsys.readouterr().out
+    run_id = next(w for w in out.split() if w.startswith("run-"))
+    assert "host-recon" in out
+
+    dest = tmp_path / "run"
+    assert main(["remote", "report", "download", run_id, "--out", str(dest)]) == 0
+    records = json.loads((dest / "results.json").read_text())
+    assert [r["check"] for r in records] == ["host-recon"]
+    assert json.loads((dest / "run-meta.json").read_text())["run_id"] == run_id
+    assert any((dest / "evidence").iterdir())
+
+
+def test_a_run_that_fails_to_start_says_why(server, config_dir, monkeypatch, capsys):
+    from atf.cli import main
+    _login(server, monkeypatch)
+    capsys.readouterr()
+
+    assert main(["remote", "run", "--bench", "no-such-bench", "--id", "host-recon", "--wait"]) == 1
+    assert "no-such-bench" in capsys.readouterr().err
