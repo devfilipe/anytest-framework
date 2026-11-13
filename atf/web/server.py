@@ -146,8 +146,10 @@ class RunState:
     def status(self) -> dict:
         """What (if anything) is running right now — for the UI's run indicator."""
         p = self.pending
+        last = next((e for e in reversed(self.events) if e.get("type") in ("done", "error")), None)
         return {"active": self.active, "who": self.who, "plan": self.plan,
                 "cancelling": self.cancel_event.is_set(),
+                "last": last,                              # how the latest run ended: done (run_id) or error
                 "waiting_on": ({"check": p["check_id"], "instructions": p["instructions"]}
                                if p else None)}
 
@@ -165,14 +167,14 @@ class RunState:
         return True
 
     def _load_bench(self, name: str):
+        """The named bench of the store; the server's default bench file only when no name is given —
+        a name that is not there (a typo) must fail the run, not run it against another bench."""
         from atf.core import inventory
-        if name and self.repo:
-            try:
-                if self.repo.get_bench(name) is not None:
-                    return self.repo.inventory_bench(name)
-            except Exception:
-                pass
-        return inventory.load(self.bench_path)
+        if not name:
+            return inventory.load(self.bench_path)
+        if self.repo and self.repo.get_bench(name) is not None:
+            return self.repo.inventory_bench(name)
+        raise ValueError(f"bench {name!r} not found")
 
     def _run(self, params: dict):
         import time as _time
