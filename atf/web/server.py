@@ -1260,6 +1260,30 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
     def benches():
         return repo.list_benches()
 
+    health_cache: dict = {}                             # bench name -> (time, {board: {alias: status}})
+
+    @app.get("/api/benches/health")                     # before /{name}: "health" is not a bench
+    def benches_health(refresh: bool = False):
+        """Per bench, board and driver: does the server reach what the driver points at (ICMP + TCP
+        connect, never a login). Cached 60 s; `refresh=1` probes again."""
+        import time as _t
+
+        from atf.core.health import bench_health
+        from atf.core.inventory import parse as parse_bench
+        out = {}
+        for b in repo.list_benches():
+            name = b["name"]
+            hit = health_cache.get(name)
+            if refresh or not hit or _t.time() - hit[0] > 60:
+                try:
+                    # the wiring only: health needs addresses, not secrets — none is decrypted
+                    hit = (_t.time(), bench_health(parse_bench(repo.get_bench(name) or {}, {})))
+                except Exception as e:  # noqa: BLE001 — one broken bench must not hide the others
+                    hit = (_t.time(), {"_error": {"bench": {"status": "down", "target": "", "reason": str(e)[:200]}}})
+                health_cache[name] = hit
+            out[name] = hit[1]
+        return out
+
     @app.get("/api/benches/{name}")
     def bench_get(name: str):
         b = repo.get_bench(name)
