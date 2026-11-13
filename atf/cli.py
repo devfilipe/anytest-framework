@@ -95,7 +95,13 @@ def main(argv=None) -> int:
 
     sub.add_parser("_agent-worker", help="(internal) isolated run of a pushed working tree")
 
+    from atf import remote
+    remote.add_parser(sub)
+
     args = ap.parse_args(argv)
+
+    if args.cmd == "remote":
+        return remote.run(args)
 
     if args.cmd == "_mgmt-worker":
         import sys

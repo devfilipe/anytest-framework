@@ -106,6 +106,20 @@ For a shared/persistent install (not just a dev shell):
 Update flow later: `git pull` → `pip install -e '.[host,web]'` (if deps changed) → **`make image`** →
 restart the service.
 
+### Drive a server from the CLI
+
+`atf remote` talks to a running server through its API, from any machine with the engine installed:
+
+```bash
+atf remote login --server http://192.0.2.10:8899 --user admin   # asks for the password (no echo)
+atf remote bench get lab > lab.json                              # a bench as JSON
+atf remote bench put lab lab.yaml                                # write it back (YAML or JSON)
+atf remote secret set lab board1_ca --file ca.pem                # a secret from a file, never printed
+```
+
+Only the session token is kept, in `~/.config/atf/session.json` (owner-only; `ATF_CONFIG_DIR`
+moves it). The server holds tokens in memory, so a restart asks for `atf remote login` again.
+
 ## Concepts
 
 | Term | What it is |
