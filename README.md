@@ -122,6 +122,19 @@ atf remote run --bench lab --suite baseline --param phase=factory --wait   # run
 Each `--param key=value` reaches every check of the run as `ctx.params` (a dict of strings) and is
 recorded in the run's `run-meta.json` — so never pass a secret that way.
 
+A run locks the boards it touches while it runs; another run on them gets `bench busy`. To keep a
+board across several runs, reserve it:
+
+```bash
+atf remote lock take lab --board board-1 --ttl 1800   # prints the reservation id (rsv-…)
+atf remote run --bench lab --board board-1 --suite baseline --reservation rsv-… --wait
+atf remote lock list                                   # what holds each board, and for how long
+atf remote lock release rsv-…                          # or let the TTL run out
+```
+
+Only the user who took it can run under it; anyone else still gets `bench busy`. It never expires
+under a run that is using it — it ends when that run does.
+
 Only the session token is kept, in `~/.config/atf/session.json` (owner-only; `ATF_CONFIG_DIR`
 moves it). The server holds tokens in memory, so a restart asks for `atf remote login` again;
 `atf remote logout` forgets it.

@@ -172,12 +172,14 @@ def _params(items: list[str]) -> dict:
 
 
 def run_start(bench: str, boards: list[str], suite: str, ids: list[str], mgmt_backend: str,
-              wait: bool, timeout: float, params: list[str] | None = None) -> None:
+              wait: bool, timeout: float, params: list[str] | None = None, reservation: str = "") -> None:
     """Start a run on the server; with `wait`, follow it to the end and print its run id and records."""
     import time
     body = {"bench": bench, "mgmt_backend": mgmt_backend}
     if params:
         body["params"] = _params(params)
+    if reservation:
+        body["reservation"] = reservation
     if boards:
         body["board"] = boards
     if suite:
@@ -207,6 +209,29 @@ def run_start(bench: str, boards: list[str], suite: str, ids: list[str], mgmt_ba
     print(f"{run_id}  {json.dumps(last.get('counts') or {})}" + (f"  — {last['note']}" if last.get("note") else ""))
     for rec in (_api("GET", f"/api/reports/{run_id}/export").get("records") or []):
         print(f"  {rec.get('check', '?'):28} {rec.get('board', '?'):20} {rec.get('verdict', '?')}")
+
+
+def lock_take(bench: str, boards: list[str], ttl: float) -> None:
+    """Reserve boards of a bench across runs; prints the reservation id first."""
+    r = _api("POST", "/api/locks/reservations", {"bench": bench, "board": boards, "ttl": ttl})
+    print(f"{r['id']}  {', '.join(r['resources'])}  expires in {int(r['expires_in'])} s")
+
+
+def lock_release(rid: str) -> None:
+    _api("DELETE", f"/api/locks/reservations/{urllib.request.quote(rid)}")
+    print(f"reservation {rid} released")
+
+
+def lock_list() -> None:
+    """What holds which resource now: runs and reservations."""
+    held = _api("GET", "/api/locks") or []
+    if not held:
+        print("no locks held")
+    for h in held:
+        line = f"{h['resource']:24} {h['who']}  held {int(h.get('held_for', 0))} s"
+        if h.get("reservation"):
+            line += f"  expires in {int(h.get('expires_in', 0))} s"
+        print(line)
 
 
 def report_download(run_id: str, out: str) -> None:
@@ -258,8 +283,18 @@ def add_parser(sub) -> None:
     rp.add_argument("--param", action="append", default=[],
                     help="key=value the checks read as ctx.params (repeatable); recorded in run-meta, so no secrets")
     rp.add_argument("--mgmt-backend", default="local", choices=["local", "docker"])
+    rp.add_argument("--reservation", default="", help="run under this reservation (atf remote lock take)")
     rp.add_argument("--wait", action="store_true", help="follow the run and print its id and records")
     rp.add_argument("--timeout", type=float, default=3600, help="seconds to wait with --wait")
+    lp = rs.add_parser("lock", help="board locks: reserve boards across several runs, list what is held")
+    ls_ = lp.add_subparsers(dest="lock_cmd", required=True)
+    lt = ls_.add_parser("take", help="reserve boards of a bench; prints the reservation id")
+    lt.add_argument("bench")
+    lt.add_argument("--board", action="append", default=[], help="board to reserve (repeatable; default: all)")
+    lt.add_argument("--ttl", type=float, default=3600, help="seconds until it expires by itself (default 3600)")
+    lr = ls_.add_parser("release", help="end a reservation")
+    lr.add_argument("id")
+    ls_.add_parser("list", help="the resources held now, by runs and reservations")
     rep = rs.add_parser("report", help="the reports of runs")
     repc = rep.add_subparsers(dest="report_cmd", required=True)
     rd = repc.add_parser("download", help="write a run's folder (results, run-meta, evidence) to a directory")
@@ -291,7 +326,13 @@ def run(args) -> int:
             if not (args.suite or args.ids):
                 raise RemoteError("give --suite or at least one --id")
             run_start(args.bench, args.board, args.suite, args.ids, args.mgmt_backend, args.wait, args.timeout,
-                      args.param)
+                      args.param, args.reservation)
+        elif args.remote_cmd == "lock" and args.lock_cmd == "take":
+            lock_take(args.bench, args.board, args.ttl)
+        elif args.remote_cmd == "lock" and args.lock_cmd == "release":
+            lock_release(args.id)
+        elif args.remote_cmd == "lock" and args.lock_cmd == "list":
+            lock_list()
         elif args.remote_cmd == "report" and args.report_cmd == "download":
             report_download(args.run_id, args.out)
         elif args.remote_cmd == "secret" and args.secret_cmd == "set":

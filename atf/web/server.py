@@ -22,7 +22,7 @@ from atf.core import requirements as reqmeta
 from atf.core.checks import discover as _discover_checks
 from atf.core.report import SYMBOL, _cell
 from atf.web.agents import AgentHub
-from atf.web.locks import ResourceLocks, touched_resources
+from atf.web.locks import MAX_TTL, ReservationError, ResourceLocks, touched_resources
 
 _discover_checks()  # import all checks from the configured check-source repos (for /api/meta)
 
@@ -229,7 +229,14 @@ class RunState:
             run_dir = self.out_root / "runs" / run_id
             if self.locks is not None:                  # per-resource lock (reject on conflict)
                 who = f"agent:{via_agent.name}" if via_agent else f"pilot:{params.get('suite') or 'ad-hoc'}"
-                ok, conflict = self.locks.acquire(touched_resources(bench, boards), run_id, who=who)
+                try:                                    # a reservation the user holds counts as free for them
+                    ok, conflict = self.locks.acquire(touched_resources(bench, boards), run_id, who=who,
+                                                      reservation=params.get("reservation") or "",
+                                                      owner=params.get("owner", ""))
+                except ReservationError as e:
+                    self._emit({"type": "error", "message": str(e)})
+                    run_id = None
+                    return
                 if not ok:
                     self._emit({"type": "error", "message": "bench busy — " + "; ".join(
                         f"{r} in use by {h['who']}" for r, h in conflict.items())})
@@ -2202,6 +2209,40 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
     @app.get("/api/locks")
     def locks_list():
         return locks.held()
+
+    @app.post("/api/locks/reservations")                # hold boards across several runs, for a while
+    def reservation_take(body: dict = Body(...), me=Depends(require_login)):
+        """Reserve boards of a bench (`board`: a name or a list; none = all) for `ttl` seconds. A run
+        started with `reservation: <id>` by the same user reuses them; anyone else finds them busy."""
+        ttl = body.get("ttl", 3600)
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 0 < ttl <= MAX_TTL:
+            raise HTTPException(400, f"ttl must be a number of seconds in (0, {MAX_TTL}]")
+        try:
+            bench = state._load_bench(body.get("bench") or "")
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        boards = body.get("board") or []
+        boards = [boards] if isinstance(boards, str) else list(boards)
+        missing = sorted(set(boards) - {b.name for b in bench.boards})
+        if missing:
+            raise HTTPException(404, f"board not in bench: {', '.join(missing)}")
+        ok, got = locks.reserve(touched_resources(bench, set(boards) or None), owner=me["username"], ttl=ttl)
+        if not ok:
+            raise HTTPException(409, "bench busy — " + "; ".join(f"{r} in use by {h['who']}" for r, h in got.items()))
+        return locks.reservation(got)
+
+    @app.get("/api/locks/reservations")
+    def reservations_list(_=Depends(require_login)):
+        return locks.reservations()
+
+    @app.delete("/api/locks/reservations/{rid}")        # the owner (or an admin) ends it now
+    def reservation_release(rid: str, me=Depends(require_login)):
+        r = locks.reservation(rid)
+        if r is None:
+            raise HTTPException(404, f"reservation {rid} not found or expired")
+        if r["owner"] != me["username"] and not me.get("is_admin"):
+            raise HTTPException(403, "only the reservation's owner or an admin can release it")
+        return {"ok": locks.unreserve(rid)}
 
     @app.delete("/api/locks/{resource}")                # forced unlock — emergency escape (admin)
     def locks_force(resource: str, _=Depends(require_admin)):
