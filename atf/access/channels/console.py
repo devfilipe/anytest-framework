@@ -1,7 +1,7 @@
 """SerialChannel — driver type "serial": a board serial console via an agent.
 
 send/expect/login/sh over the serial line. The OS-specific serial bridge lives in
-AgentConn.serial_stream (socat on linux, plink on windows), so it can be driven from any agent
+AgentConn.serial_stream (socat or an inline python3 bridge on linux, plink on windows), so it can be driven from any agent
 (Linux or Windows) alike. Transport per driver config: `ssh` (bridge over the agent) or `ser2net` (raw TCP
 socket to the agent). The typical alias is `console`; it is the only driver on an IP-less board.
 """
@@ -42,7 +42,7 @@ class SerialChannel(Channel):
 
     def _free_tty(self, dev: str) -> None:
         """Console needs EXCLUSIVE access. A leftover picocom/minicom/screen holding the
-        tty blocks the socat bridge silently (opens but reads 0 bytes → expect timeout).
+        tty blocks the serial bridge silently (opens but reads 0 bytes → expect timeout).
         Kill any holder on the agent first. Best-effort; linux agents only (fuser)."""
         if self.ac.platform == "windows":
             return
@@ -77,7 +77,11 @@ class SerialChannel(Channel):
                     self._buf = self._buf[m.end():]
                     return i, out
             self._pump(0.3)
-        raise TimeoutError(f"expect {patterns!r} timed out; tail={self._buf[-160:]!r}")
+        msg = f"expect {patterns!r} timed out; tail={self._buf[-160:]!r}"
+        why = getattr(self._t, "failure", lambda: "")()
+        if why:
+            msg += f"; serial bridge closed ({why})"
+        raise TimeoutError(msg)
 
     def login(self, user: str, password: str, timeout: float = 30) -> bool:
         self.send("\r")

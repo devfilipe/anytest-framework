@@ -11,6 +11,41 @@ import shlex
 
 from atf.access.channels.base import CmdResult
 
+# Inline serial bridge for linux agents without socat: copy stdin→tty and tty→stdout,
+# unbuffered, until stdin closes (the SSH session ends) or the tty goes away.
+_PY_BRIDGE = """\
+import os, select, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY)
+i, o = sys.stdin.fileno(), sys.stdout.fileno()
+def put(f, b):
+    while b:
+        b = b[os.write(f, b):]
+while True:
+    r = select.select([i, fd], [], [])[0]
+    if i in r:
+        b = os.read(i, 4096)
+        if not b:
+            break
+        put(fd, b)
+    if fd in r:
+        try:
+            b = os.read(fd, 4096)
+        except OSError:
+            break
+        if not b:
+            break
+        put(o, b)
+"""
+
+
+def serial_bridge_cmd(dev: str, baud: int, bridge: str) -> str:
+    """Shell command that bridges serial `dev` to the command's stdin/stdout on a linux agent."""
+    if bridge == "socat":
+        return f"socat - {dev},b{baud},raw,echo=0"
+    q = shlex.quote(dev)
+    return (f"stty -F {q} {int(baud)} raw -echo && "
+            f"exec python3 -u -c {shlex.quote(_PY_BRIDGE)} {q}")
+
 
 class _StreamT:
     """Raw byte transport over a paramiko channel or a socket (for send/expect)."""
@@ -28,6 +63,26 @@ class _StreamT:
         except Exception:
             return b""
 
+    def failure(self) -> str:
+        """Why the remote bridge is gone ('exit N: <stderr>'), or '' while it still runs.
+        A bridge that dies at start (tty permission, missing device, no tool) would otherwise
+        only show as an expect timeout with nothing read."""
+        if self._sock:
+            return ""
+        try:
+            if not self._o.exit_status_ready():
+                return ""
+            err = b""
+            while self._o.recv_stderr_ready():
+                chunk = self._o.recv_stderr(4096)
+                if not chunk:
+                    break
+                err += chunk
+            rc = self._o.recv_exit_status()
+        except Exception:
+            return ""
+        return f"exit {rc}: {err.decode('utf-8', 'replace').strip()}"
+
     def close(self) -> None:
         try:
             self._o.close()
@@ -40,6 +95,7 @@ class AgentConn:
         self.agent = agent
         self.platform = (agent.platform or "linux").lower()
         self._ssh = None
+        self._bridge = None
 
     def _c(self):
         if self._ssh is None:
@@ -87,13 +143,26 @@ class AgentConn:
         return sorted(int(line.split()[0]) for line in out.splitlines()
                       if line.strip().endswith("open"))
 
+    def serial_bridge(self) -> str:
+        """The serial bridge this linux agent has: 'socat', else 'python3'. Probed once."""
+        if self._bridge is None:
+            for tool in ("socat", "python3"):
+                if self.run(f"command -v {tool}").rc == 0:
+                    self._bridge = tool
+                    break
+            else:
+                raise RuntimeError(
+                    f"agent {self.agent.name!r}: neither socat nor python3 is available "
+                    "to bridge the serial console; install one of them on the agent")
+        return self._bridge
+
     def serial_stream(self, dev: str, baud: int) -> _StreamT:
         """Bridge a serial device over SSH; returns a raw send/recv transport."""
         if self.platform == "windows":
             # best-effort (untested): plink (PuTTY) bridging a COM port
             cmd = f"plink -serial {dev} -sercfg {baud},8,n,1,N"
         else:
-            cmd = f"socat - {dev},b{baud},raw,echo=0"
+            cmd = serial_bridge_cmd(dev, baud, self.serial_bridge())
         chan = self._c().get_transport().open_session()
         chan.exec_command(cmd)
         return _StreamT(chan, is_socket=False)
