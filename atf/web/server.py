@@ -1799,6 +1799,12 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
         _no_agent_account(me)
         return {"token": repo.rotate_user_agent_token(me["username"])}
 
+    @app.get("/atf.pyz")                                # zero-install client: remote + mcp, this server's code
+    def client_pyz():
+        from atf.client_pyz import build
+        return Response(build(), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="atf.pyz"'})
+
     @app.get("/agent.py")                               # zero-install: tester curls + runs this
     def agent_script():
         from atf import agent as _agentmod

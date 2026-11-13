@@ -102,11 +102,18 @@ def bench_get(name: str) -> None:
 
 
 def bench_put(name: str, file: str) -> None:
-    import yaml                            # a core dependency; JSON is valid YAML, so either is read
     try:
-        data = yaml.safe_load(Path(file).read_text())
-    except (OSError, yaml.YAMLError) as e:
-        raise RemoteError(f"cannot read {file}: {e}") from None
+        text = Path(file).read_text()
+    except OSError as e:
+        raise RemoteError(f"cannot read {file}: {e.strerror}") from None
+    try:
+        import yaml                        # JSON is valid YAML, so either is read when pyyaml is there
+    except ImportError:                    # the downloaded client (atf.pyz) may run without it: JSON only
+        yaml = None
+    try:
+        data = yaml.safe_load(text) if yaml else json.loads(text)
+    except Exception as e:  # noqa: BLE001 — yaml.YAMLError or ValueError, reported as one line
+        raise RemoteError(f"cannot read {file}: {e}" + ("" if yaml else " (YAML needs pyyaml; JSON works)")) from None
     if not isinstance(data, dict):
         raise RemoteError(f"{file} is not a bench (a mapping with agents/boards)")
     _api("PUT", f"/api/benches/{urllib.request.quote(name)}", data)
