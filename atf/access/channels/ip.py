@@ -122,7 +122,8 @@ class IpChannel(Channel):
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                 status, raw = r.status, r.read()
         except urllib.error.HTTPError as e:
-            status, raw = e.code, e.read()
+            with e:                       # an HTTPError holds the open response: close it
+                status, raw = e.code, e.read()
         text = raw.decode("utf-8", "replace")
         try:
             return status, json.loads(text)
