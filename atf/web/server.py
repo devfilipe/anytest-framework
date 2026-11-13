@@ -2181,7 +2181,7 @@ def build_app(out_root: Path, bench_path: str, repo) -> FastAPI:
                 f"{r} in use by {h['who']}" for r, h in conflict.items()))
         out = None
         try:
-            records, dev_dirs, out = _agent_worker_run(
+            records, dev_dirs, out, _meta = _agent_worker_run(
                 hub, s, Path(bench_path).stem, board,
                 {"ids": body.get("ids"), "req": body.get("req"), "vectors": body.get("vectors")},
                 body.get("mgmt_backend", "local"), params=body.get("params"))

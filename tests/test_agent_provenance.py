@@ -156,3 +156,12 @@ def test_an_older_agent_without_upload_state_falls_back_to_the_registration_stat
 
     got = _dev_source(meta)
     assert (got["commit"], got["ref"], got["dirty"], got["state_at"]) == ("abc1234", "main", True, "register")
+
+
+def test_running_an_agent_working_tree_from_the_agents_page_returns_its_records(server, agent, user):
+    r = user.post(f"/api/agents/{agent}/run", json={"bench": "lab", "board": "board-1",
+                                                   "ids": ["agent-provenance-probe"], "mgmt_backend": "local"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] and [x["check"] for x in body["records"]] == ["agent-provenance-probe"]
